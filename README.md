@@ -7,6 +7,7 @@
 
 | 読むもの | 内容 |
 |---|---|
+| [docs/FINDINGS.md](docs/FINDINGS.md) | **分析結果サマリ**。5つの問いへの回答と全指標の実測値 |
 | [docs/PURPOSE.md](docs/PURPOSE.md) | **このリポジトリの存在意義**。最初に読む |
 | [docs/.sdd/](docs/.sdd/) | 仕様書（意味単位で分割） |
 | [AGENTS.md](AGENTS.md) | 作業指針・絶対規則 |

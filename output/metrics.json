@@ -1,0 +1,93 @@
+{
+  "cooldown": {
+    "saturation_within_20pct_of_floor": 0.2199010445299615,
+    "interpretation": "20-30%以上ならE-2は下限値としてのみ使用可、E-3は結論を出さない"
+  },
+  "f1_daily_summary": {
+    "by_day": [
+      {
+        "day": "2025-10-10",
+        "n_participants": 192,
+        "n_checkins": 1367
+      },
+      {
+        "day": "2025-10-11",
+        "n_participants": 103,
+        "n_checkins": 747
+      }
+    ],
+    "n_both_days": 43,
+    "n_zero_checkin": 50,
+    "n_card_ungenerated": 9
+  },
+  "a_dwell_time": {
+    "friday": {
+      "day": "2025-10-10",
+      "median": 64.48641986666667,
+      "mean": 84.42461932454546,
+      "q1": 29.31947023333333,
+      "q3": 114.13889018333332,
+      "n_single": 27,
+      "pct_single": 14.0625,
+      "pct_under_30min": 36.97916666666667,
+      "pct_over_3h": 11.515151515151516
+    },
+    "saturday": {
+      "day": "2025-10-11",
+      "median": 58.38306718333333,
+      "mean": 69.3161073871212,
+      "q1": 34.152389058333334,
+      "q3": 95.89321884583335,
+      "n_single": 15,
+      "pct_single": 14.563106796116504,
+      "pct_under_30min": 32.038834951456316,
+      "pct_over_3h": 2.272727272727273
+    }
+  },
+  "c_booth_count": {
+    "friday": {
+      "day": "2025-10-10",
+      "median_n_booths": 6.0,
+      "mean_n_booths": 7.119791666666667
+    },
+    "saturday": {
+      "day": "2025-10-11",
+      "median_n_booths": 5.0,
+      "mean_n_booths": 7.252427184466019
+    },
+    "regression_friday": {
+      "day": "2025-10-10",
+      "slope_booths_per_hour": 1.6627767771559883,
+      "intercept": 5.781557180660641,
+      "n": 165
+    },
+    "bingo_completion": {
+      "median_n_card_hit": 3.0,
+      "pct_completed_4_lines": 14.90066225165563,
+      "n_users": 302
+    }
+  },
+  "b_fallback_release": {
+    "friday": "2025-10-10T11:34:48.665938+09:00",
+    "saturday": "2025-10-11T10:56:16.694949+09:00"
+  },
+  "d_booth_skew": {
+    "max_visits": 128,
+    "min_visits": 25,
+    "ratio_max_to_min": 5.12,
+    "diff_max_to_min": 103,
+    "top20pct_share": 30.368968779564803,
+    "top20pct_n_booths": 8
+  },
+  "recommendation_effect": {
+    "recommended_hit_rate": 0.3541666666666667,
+    "random_hit_rate": 0.2703919491525424,
+    "n_recommended_slots": 912,
+    "n_random_slots": 3776,
+    "caveat": "推薦マスは中央4マス固定のため、位置効果と推薦効果が交絡している"
+  },
+  "vote_finalization": {
+    "vote_finalized_rate_pct": 36.423841059602644,
+    "n": 302
+  }
+}
