@@ -37,6 +37,15 @@ def load_tables(tables_dir: Path) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFr
     return visits, participants, booths
 
 
+def select_day(df: pd.DataFrame, day) -> pd.DataFrame:
+    """`day` が None なら絞り込まない（GUI 側で絞り込み済みのフレームを渡す用途）。"""
+    return df if day is None else df[df["day"] == day]
+
+
+def _day_label(day) -> str:
+    return "全期間" if day is None else str(day)
+
+
 # --- 交絡1: クールタイムの床の検出 -----------------------------------------
 
 
@@ -81,13 +90,13 @@ def daily_summary(participants: pd.DataFrame) -> pd.DataFrame:
 # --- A: 滞在時間 -------------------------------------------------------------
 
 
-def dwell_time_stats(participants: pd.DataFrame, day) -> dict:
-    day_df = participants[participants["day"] == day]
+def dwell_time_stats(participants: pd.DataFrame, day=None) -> dict:
+    day_df = select_day(participants, day)
     multi = day_df[day_df["is_single"] == False]  # noqa: E712
     dwell = multi["dwell_min"].dropna()
     under_30 = day_df["dwell_min"].dropna()  # includes single-visit (dwell=0) in denominator
     return {
-        "day": str(day),
+        "day": _day_label(day),
         "median": float(dwell.median()) if len(dwell) else None,
         "mean": float(dwell.mean()) if len(dwell) else None,
         "q1": float(dwell.quantile(0.25)) if len(dwell) else None,
@@ -102,25 +111,26 @@ def dwell_time_stats(participants: pd.DataFrame, day) -> dict:
 # --- C: 訪問ブース数 ---------------------------------------------------------
 
 
-def booth_count_stats(participants: pd.DataFrame, day) -> dict:
-    day_df = participants[participants["day"] == day]
+def booth_count_stats(participants: pd.DataFrame, day=None) -> dict:
+    day_df = select_day(participants, day)
     return {
-        "day": str(day),
+        "day": _day_label(day),
         "median_n_booths": float(day_df["n_booths"].median()) if len(day_df) else None,
         "mean_n_booths": float(day_df["n_booths"].mean()) if len(day_df) else None,
     }
 
 
-def dwell_vs_booths_regression(participants: pd.DataFrame, day) -> dict:
+def dwell_vs_booths_regression(participants: pd.DataFrame, day=None) -> dict:
     """C-3: 単発訪問者を除外した回帰。傾き = ブース/分。"""
-    day_df = participants[(participants["day"] == day) & (participants["is_single"] == False)]  # noqa: E712
+    day_df = select_day(participants, day)
+    day_df = day_df[day_df["is_single"] == False]  # noqa: E712
     x = day_df["dwell_min"].dropna()
     y = day_df.loc[x.index, "n_booths"]
     if len(x) < 2:
-        return {"day": str(day), "slope_booths_per_hour": None, "intercept": None, "n": len(x)}
+        return {"day": _day_label(day), "slope_booths_per_hour": None, "intercept": None, "n": len(x)}
     slope, intercept = np.polyfit(x, y, 1)
     return {
-        "day": str(day),
+        "day": _day_label(day),
         "slope_booths_per_hour": float(slope * 60),
         "intercept": float(intercept),
         "n": int(len(x)),
@@ -159,12 +169,12 @@ def bingo_completion(participants: pd.DataFrame) -> dict:
 # --- B: 時間帯別 --------------------------------------------------------------
 
 
-def time_series(visits: pd.DataFrame, participants: pd.DataFrame, day, bin_minutes: int = 30) -> pd.DataFrame:
-    day_visits = visits[visits["day"] == day].copy()
+def time_series(visits: pd.DataFrame, participants: pd.DataFrame, day=None, bin_minutes: int = 30) -> pd.DataFrame:
+    day_visits = select_day(visits, day).copy()
     day_visits["bin"] = day_visits["ts_jst"].dt.floor(f"{bin_minutes}min")
     b1 = day_visits.groupby("bin").size().rename("n_checkins")
 
-    day_participants = participants[participants["day"] == day].dropna(subset=["first_ts"])
+    day_participants = select_day(participants, day).dropna(subset=["first_ts"])
     first_bin = day_participants["first_ts"].dt.floor(f"{bin_minutes}min")
     b2 = first_bin.value_counts().rename("n_new_participants").sort_index()
 
@@ -180,9 +190,9 @@ def time_series(visits: pd.DataFrame, participants: pd.DataFrame, day, bin_minut
     return out.sort_values("bin")
 
 
-def recommendation_fallback_release_time(visits: pd.DataFrame, day) -> str | None:
+def recommendation_fallback_release_time(visits: pd.DataFrame, day=None) -> str | None:
     """チェックイン実績者数が20人に到達した時刻（= 20人目の初回チェックイン時刻）。"""
-    day_visits = visits[visits["day"] == day].sort_values("ts_jst")
+    day_visits = select_day(visits, day).sort_values("ts_jst")
     first_seen = day_visits.drop_duplicates("pid", keep="first").sort_values("ts_jst")
     if len(first_seen) < RECOMMENDATION_FALLBACK_THRESHOLD:
         return None
@@ -220,8 +230,9 @@ def booth_skew_stats(ranking: pd.DataFrame) -> dict:
 # --- E-1: 初回訪問ブース -------------------------------------------------------
 
 
-def first_visit_distribution(visits: pd.DataFrame, day) -> pd.DataFrame:
-    firsts = visits[(visits["day"] == day) & (visits["visit_seq"] == 1)]
+def first_visit_distribution(visits: pd.DataFrame, day=None) -> pd.DataFrame:
+    firsts = select_day(visits, day)
+    firsts = firsts[firsts["visit_seq"] == 1]
     return firsts.groupby("booth_id").size().rename("n_first_visits").sort_values(ascending=False).reset_index()
 
 

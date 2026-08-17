@@ -72,8 +72,13 @@ push 権限はあるが、**読み取り専用として扱い、一切変更し�
 | `dump_firestore.py` | Firestoreからの一括抽出・仮名化 | [dump-spec.md](docs/.sdd/03-extraction/dump-spec.md) |
 | `build_tables.py` | 中間テーブル生成・除外規則の適用 | [intermediate-tables.md](docs/.sdd/04-analysis/intermediate-tables.md) / [exclusion-rules.md](docs/.sdd/03-extraction/exclusion-rules.md) |
 | `metrics.py` | 指標カタログ(A〜F)・クールタイム床検出 | [metrics-catalog.md](docs/.sdd/04-analysis/metrics-catalog.md) / [confounders.md](docs/.sdd/04-analysis/confounders.md) |
-| `visualize.py` | 判断に直結する図表の生成 | [chart-spec.md](docs/.sdd/05-visualization/chart-spec.md) |
+| `visualize.py` | 判断に直結する図表の生成（PNG） | [chart-spec.md](docs/.sdd/05-visualization/chart-spec.md) |
+| `dashboard.py` | 絞り込み可能なローカルGUI（Streamlit） | 上記2つと同じ。指標は `metrics.py` を経由し再実装しない |
 | `run_pipeline.py` | 2〜4を一括実行するエントリポイント | — |
+
+**指標の算出式を `dashboard.py` や `visualize.py` に書かないこと。**
+必ず `metrics.py` に置き、GUI・図表の双方から呼ぶ。仕様の二重管理を避けるため。
+絞り込み済みのフレームを渡す場合は `day=None` で呼べばよい。
 
 **まだ Firestore からの実データ抽出・実行検証は行っていない。**
 `tests/` の合成データによるユニットテストのみで検証済み。

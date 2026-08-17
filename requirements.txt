@@ -1,5 +1,9 @@
 google-cloud-firestore==2.21.0
-pandas>=2.2
+# numpy>=2 は streamlit が使う pyarrow のビルド前提。pandas 2.2.1 以下は numpy<2 を
+# 要求して衝突するため、pandas も 2.2.2 以上にそろえる
+numpy>=2.0
+pandas>=2.2.2
 matplotlib>=3.9
 plotly>=5.24
+streamlit>=1.40
 pytest>=8.0
