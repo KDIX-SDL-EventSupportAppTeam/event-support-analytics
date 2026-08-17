@@ -127,10 +127,32 @@ def dwell_vs_booths_regression(participants: pd.DataFrame, day) -> dict:
     }
 
 
+def per_user_card_stats(participants: pd.DataFrame) -> pd.DataFrame:
+    """カード関連の指標を「参加者×日」から「参加者」単位に畳み込む。
+
+    participants は (pid, day) が1行のため、同一カードを指す n_card / n_rec_total は
+    両日参加者で重複する。集計時は必ずこの関数を通すこと。
+
+    - n_card / n_rec_total … 全日で同じ値なので max（= 1回だけ数える）
+    - n_card_hit / n_rec_hit … 同一ブースへの再チェックインが存在せず日ごとのヒットは
+      互いに素なので sum
+    - bingo_lines … build_tables 側で累積判定済みなので max（最終日の値が全期間の値）
+    """
+    return participants.groupby("pid").agg(
+        n_card=("n_card", "max"),
+        n_rec_total=("n_rec_total", "max"),
+        n_card_hit=("n_card_hit", "sum"),
+        n_rec_hit=("n_rec_hit", "sum"),
+        bingo_lines=("bingo_lines", "max"),
+    )
+
+
 def bingo_completion(participants: pd.DataFrame) -> dict:
+    by_user = per_user_card_stats(participants)
     return {
-        "median_n_card_hit": float(participants["n_card_hit"].median()),
-        "pct_completed_4_lines": float((participants["bingo_lines"] >= 4).mean() * 100),
+        "median_n_card_hit": float(by_user["n_card_hit"].median()),
+        "pct_completed_4_lines": float((by_user["bingo_lines"] >= 4).mean() * 100),
+        "n_users": int(len(by_user)),
     }
 
 
@@ -159,12 +181,12 @@ def time_series(visits: pd.DataFrame, participants: pd.DataFrame, day, bin_minut
 
 
 def recommendation_fallback_release_time(visits: pd.DataFrame, day) -> str | None:
-    """チェックイン実績者数が20人を超えた時刻。"""
+    """チェックイン実績者数が20人に到達した時刻（= 20人目の初回チェックイン時刻）。"""
     day_visits = visits[visits["day"] == day].sort_values("ts_jst")
     first_seen = day_visits.drop_duplicates("pid", keep="first").sort_values("ts_jst")
-    if len(first_seen) <= RECOMMENDATION_FALLBACK_THRESHOLD:
+    if len(first_seen) < RECOMMENDATION_FALLBACK_THRESHOLD:
         return None
-    row = first_seen.iloc[RECOMMENDATION_FALLBACK_THRESHOLD]
+    row = first_seen.iloc[RECOMMENDATION_FALLBACK_THRESHOLD - 1]
     return row["ts_jst"].isoformat()
 
 
@@ -179,7 +201,8 @@ def booth_visit_ranking(visits: pd.DataFrame, booths: pd.DataFrame) -> pd.DataFr
 
 
 def booth_skew_stats(ranking: pd.DataFrame) -> dict:
-    nonzero = ranking[ranking["n_visits"] > 0]
+    # min_v / ratio は訪問者0のブースも含めた全40ブースから算出する。
+    # 0件のブースが存在する場合、倍率は定義できないため差で報告する（D-2の注記）。
     max_v = ranking["n_visits"].max()
     min_v = ranking["n_visits"].min()
     top_n = max(1, round(len(ranking) * 0.2))
@@ -206,10 +229,11 @@ def first_visit_distribution(visits: pd.DataFrame, day) -> pd.DataFrame:
 
 
 def recommendation_effect(participants: pd.DataFrame) -> dict:
-    rec_hit = participants["n_rec_hit"].sum()
-    rec_total = participants["n_rec_total"].sum()
-    card_hit = participants["n_card_hit"].sum()
-    card_total = participants["n_card"].sum()
+    by_user = per_user_card_stats(participants)  # 両日参加者の分母重複を排除する
+    rec_hit = by_user["n_rec_hit"].sum()
+    rec_total = by_user["n_rec_total"].sum()
+    card_hit = by_user["n_card_hit"].sum()
+    card_total = by_user["n_card"].sum()
     random_hit = card_hit - rec_hit
     random_total = card_total - rec_total
     return {

@@ -47,13 +47,40 @@ def build_all():
     return visits, participants, booths
 
 
-def test_recommendation_fallback_release_time_after_20th_participant():
+def test_recommendation_fallback_release_time_is_20th_participant():
     visits, participants, booths = build_all()
-    day = metrics.FRIDAY
-    t = metrics.recommendation_fallback_release_time(visits, day)
+    t = metrics.recommendation_fallback_release_time(visits, metrics.FRIDAY)
     assert t is not None
-    # the 21st distinct participant (index 20, i=21) first checks in at minute :21
-    assert ":21:" in t
+    # 20人目（i=20）の初回チェックインは :20。21人目ではない
+    assert ":20:" in t
+
+
+def test_recommendation_fallback_returns_none_below_threshold():
+    raw = make_raw()
+    keep = {f"u{i:04d}" for i in range(1, 20)}  # 19人だけ残す
+    raw["checkins"] = [c for c in raw["checkins"] if c["pid"] in keep]
+    booths = build_booths(raw)
+    visits, _ = build_visits(raw, booths)
+    assert metrics.recommendation_fallback_release_time(visits, metrics.FRIDAY) is None
+
+
+def test_card_denominator_not_double_counted_for_both_day_participants():
+    """両日参加者のカード16マスを2回数えないこと（分母の二重計上防止）。"""
+    raw = make_raw()
+    # u0001 を土曜にも参加させる（カードは同一のまま）
+    raw["checkins"].append({"pid": "u0001", "booth_id": "②", "ts_utc": "2025-10-11T01:00:00Z"})
+    booths = build_booths(raw)
+    visits, _ = build_visits(raw, booths)
+    participants = build_participants(raw, visits)
+
+    assert len(participants[participants["pid"] == "u0001"]) == 2  # 2日分の行がある
+
+    by_user = metrics.per_user_card_stats(participants)
+    # カードは1枚ぶんだけ数える
+    assert by_user.loc["u0001", "n_card"] == 2
+    assert by_user.loc["u0001", "n_rec_total"] == 1
+    # 全体の分母は参加者数×カード枚数であり、延べ日数に依存しない
+    assert by_user["n_rec_total"].sum() == 25
 
 
 def test_recommendation_effect_perfect_for_recommended_slots():

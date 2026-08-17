@@ -116,46 +116,54 @@ def build_participants(raw: dict, visits: pd.DataFrame) -> pd.DataFrame:
 
     rows = []
 
-    grouped = visits.groupby(["pid", "day"])
-    for (pid, day), g in grouped:
-        g = g.sort_values("ts_jst")
-        first_ts, last_ts = g["ts_jst"].iloc[0], g["ts_jst"].iloc[-1]
-        n_booths = len(g)
-        dwell_min = (last_ts - first_ts).total_seconds() / 60
-
+    for pid, user_visits in visits.groupby("pid"):
         card = bingo[bingo["pid"] == pid]
         n_card = len(card)
-        checked_booths = set(g["booth_id"])
-        hit_positions = set(
-            card.loc[card["booth_id"].isin(checked_booths), "position"]
-        )
-        n_card_hit = len(hit_positions)
         rec_card = card[card["is_recommendation"] == True]  # noqa: E712
         n_rec_total = len(rec_card)
-        n_rec_hit = len(set(rec_card["position"]) & hit_positions)
-        bingo_lines = _bingo_lines_completed(hit_positions)
+        rec_positions = set(rec_card["position"])
 
-        rows.append(
-            {
-                "pid": pid,
-                "day": day,
-                "age": users.loc[pid, "age"] if pid in users.index else None,
-                "gender": users.loc[pid, "gender"] if pid in users.index else None,
-                "genre": users.loc[pid, "genre"] if pid in users.index else None,
-                "first_ts": first_ts,
-                "last_ts": last_ts,
-                "dwell_min": dwell_min,
-                "n_booths": n_booths,
-                "is_single": n_booths == 1,
-                "n_card": n_card,
-                "n_card_hit": n_card_hit,
-                "n_rec_hit": n_rec_hit,
-                "n_rec_total": n_rec_total,
-                "bingo_lines": bingo_lines,
-                "voted": pid in voted_pids,
-                "vote_finalized": pid in finalized_pids,
-            }
-        )
+        # ビンゴカードは日をまたいで持ち越される。ライン成立は当日分だけでなく
+        # その日までに踏んだマスの累積で判定する（日ごとにリセットされない）。
+        cumulative_positions: set[int] = set()
+
+        for day, g in user_visits.groupby("day"):
+            g = g.sort_values("ts_jst")
+            first_ts, last_ts = g["ts_jst"].iloc[0], g["ts_jst"].iloc[-1]
+            n_booths = len(g)
+            dwell_min = (last_ts - first_ts).total_seconds() / 60
+
+            checked_booths = set(g["booth_id"])
+            hit_positions = set(card.loc[card["booth_id"].isin(checked_booths), "position"])
+            # 同一ブースへの再チェックインは構造上存在しないため、日ごとのヒットは
+            # 互いに素。よって n_card_hit / n_rec_hit は日をまたいで合算してよい。
+            n_card_hit = len(hit_positions)
+            n_rec_hit = len(rec_positions & hit_positions)
+
+            cumulative_positions |= hit_positions
+            bingo_lines = _bingo_lines_completed(cumulative_positions)
+
+            rows.append(
+                {
+                    "pid": pid,
+                    "day": day,
+                    "age": users.loc[pid, "age"] if pid in users.index else None,
+                    "gender": users.loc[pid, "gender"] if pid in users.index else None,
+                    "genre": users.loc[pid, "genre"] if pid in users.index else None,
+                    "first_ts": first_ts,
+                    "last_ts": last_ts,
+                    "dwell_min": dwell_min,
+                    "n_booths": n_booths,
+                    "is_single": n_booths == 1,
+                    "n_card": n_card,
+                    "n_card_hit": n_card_hit,
+                    "n_rec_hit": n_rec_hit,
+                    "n_rec_total": n_rec_total,
+                    "bingo_lines": bingo_lines,
+                    "voted": pid in voted_pids,
+                    "vote_finalized": pid in finalized_pids,
+                }
+            )
 
     # チェックイン0件ユーザーも1行だけ作る（アプリを使わなかった層を消さない）
     active_pids = set(visits["pid"])
