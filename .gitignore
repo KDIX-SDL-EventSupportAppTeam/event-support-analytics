@@ -1,0 +1,19 @@
+# データ本体（個人の行動履歴を含むためコミットしない）
+data/
+
+# 認証情報
+*.key.json
+service-account*.json
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
