@@ -11,9 +11,37 @@
 | [docs/.sdd/](docs/.sdd/) | 仕様書（意味単位で分割） |
 | [AGENTS.md](AGENTS.md) | 作業指針・絶対規則 |
 
+## 使い方
+
+```bash
+pip install -r requirements.txt
+
+# 1. 抽出（Firestoreへは一度だけ接続。ADC認証が必要）
+python src/dump_firestore.py
+
+# 2. 中間テーブル生成 → 指標算出 → 図表生成（以降はローカルファイルのみで完結）
+python src/run_pipeline.py
+```
+
+除外規則2（運営・出展者候補）の一覧だけを確認したい場合:
+
+```bash
+python src/build_tables.py data/raw/dump_YYYYMMDD_HHMMSS.json --show-staff-candidates
+```
+
+テスト（合成データのみを使用。実データやFirestore接続は不要）:
+
+```bash
+python -m pytest tests/
+```
+
 ## 現在の状態
 
-**仕様策定フェーズ。実装コードはまだ存在しない。**
+抽出（`dump_firestore.py`）・中間テーブル生成（`build_tables.py`）・
+指標算出（`metrics.py`）・可視化（`visualize.py`）を実装済み。
+
+まだ Firestore からの実データ抽出は行っていない
+（GCP接続はローカル環境からの一度限りの実行を想定しているため）。
 
 ## 関連リポジトリ
 

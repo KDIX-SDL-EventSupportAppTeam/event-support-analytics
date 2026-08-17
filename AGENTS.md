@@ -65,8 +65,18 @@ push 権限はあるが、**読み取り専用として扱い、一切変更し�
 
 ## 現在の状態
 
-仕様策定フェーズ。**実装コードはまだ存在しない。**
+`src/` 以下に一通りの実装が揃っている。
 
-次の実装対象は以下の2本。
-1. `dump_firestore.py` — 仕様: [docs/.sdd/03-extraction/dump-spec.md](docs/.sdd/03-extraction/dump-spec.md)
-2. `build_tables.py` — 仕様: [docs/.sdd/04-analysis/intermediate-tables.md](docs/.sdd/04-analysis/intermediate-tables.md)
+| スクリプト | 役割 | 仕様 |
+|---|---|---|
+| `dump_firestore.py` | Firestoreからの一括抽出・仮名化 | [dump-spec.md](docs/.sdd/03-extraction/dump-spec.md) |
+| `build_tables.py` | 中間テーブル生成・除外規則の適用 | [intermediate-tables.md](docs/.sdd/04-analysis/intermediate-tables.md) / [exclusion-rules.md](docs/.sdd/03-extraction/exclusion-rules.md) |
+| `metrics.py` | 指標カタログ(A〜F)・クールタイム床検出 | [metrics-catalog.md](docs/.sdd/04-analysis/metrics-catalog.md) / [confounders.md](docs/.sdd/04-analysis/confounders.md) |
+| `visualize.py` | 判断に直結する図表の生成 | [chart-spec.md](docs/.sdd/05-visualization/chart-spec.md) |
+| `run_pipeline.py` | 2〜4を一括実行するエントリポイント | — |
+
+**まだ Firestore からの実データ抽出・実行検証は行っていない。**
+`tests/` の合成データによるユニットテストのみで検証済み。
+実データで実行した際、仕様上「実データを見てから確定する」とされている項目
+（[confounders.md](docs/.sdd/04-analysis/confounders.md) 末尾の表）に
+食い違いが出た場合は、該当する仕様書を更新すること。
