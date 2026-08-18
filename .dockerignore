@@ -1,0 +1,18 @@
+# Firestore からの生ダンプはイメージに入れない（中間テーブルだけで画面は動く）
+data/raw/
+
+.git/
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+tests/
+docs/
+output/
+.claude/
+*.key.json
+service-account*.json
+.env
+.env.*
+.streamlit/secrets.toml

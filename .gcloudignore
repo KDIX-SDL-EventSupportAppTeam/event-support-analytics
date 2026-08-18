@@ -1,0 +1,26 @@
+# gcloud run deploy --source は .gitignore ではなく **このファイル** を見る。
+# .gitignore は data/ をまるごと除外しているため、これが無いと
+# data/tables/*.csv がビルドコンテキストに入らず、画面がデータ無しで起動してしまう。
+# 中間テーブルは意図的に含める（コミットはしない／イメージには入れる）。
+
+.git/
+.gitignore
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.py[cod]
+tests/
+docs/
+output/
+.claude/
+
+# 生ダンプは送らない（中間テーブルだけで画面は動く）
+data/raw/
+
+# 認証情報
+*.key.json
+service-account*.json
+.env
+.env.*
+.streamlit/secrets.toml
