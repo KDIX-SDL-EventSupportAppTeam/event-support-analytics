@@ -76,7 +76,9 @@ push 権限はあるが、**読み取り専用として扱い、一切変更し�
 | `build_tables.py` | 中間テーブル生成・除外規則の適用 | [intermediate-tables.md](docs/.sdd/04-analysis/intermediate-tables.md) / [exclusion-rules.md](docs/.sdd/03-extraction/exclusion-rules.md) |
 | `metrics.py` | 指標カタログ(A〜F)・クールタイム床検出 | [metrics-catalog.md](docs/.sdd/04-analysis/metrics-catalog.md) / [confounders.md](docs/.sdd/04-analysis/confounders.md) |
 | `visualize.py` | 判断に直結する図表の生成（PNG） | [chart-spec.md](docs/.sdd/05-visualization/chart-spec.md) |
-| `dashboard.py` | 絞り込み可能なローカルGUI（Streamlit） | 上記2つと同じ。指標は `metrics.py` を経由し再実装しない |
+| `dashboard.py` | 絞り込み可能なGUI（Streamlit） | 上記2つと同じ。指標は `metrics.py` を経由し再実装しない |
+| `auth.py` | 共有用の合言葉によるアクセス制限 | [DEPLOY.md](docs/DEPLOY.md) |
+| `report.py` | 停止時に、利用者が担当者へ転送できる不具合レポートを表示 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
 | `run_pipeline.py` | 2〜4を一括実行するエントリポイント | — |
 
 **指標の算出式を `dashboard.py` や `visualize.py` に書かないこと。**

@@ -30,6 +30,7 @@ streamlit run src/dashboard.py
 ### GUI ダッシュボード
 
 `streamlit run src/dashboard.py` でブラウザが開き、絞り込みながら結果を確認できる。
+運営メンバーへ URL で共有する手順（Cloud Run + 合言葉）は [docs/DEPLOY.md](docs/DEPLOY.md) を参照。
 
 - **絞り込み**: 開催日（両日／金／土）、年代、性別、興味ジャンル、
   チェックイン0件・単発訪問者の包含/除外、運営・出展者の pid 除外
