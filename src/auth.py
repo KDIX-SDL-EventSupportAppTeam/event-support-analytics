@@ -34,15 +34,20 @@ def _digest(value: str) -> bytes:
 
 
 def configured_password() -> str | None:
-    """設定された合言葉。未設定なら None。"""
+    """設定された合言葉。未設定なら None。
+
+    前後の空白は落とす。シークレット登録時に改行が混入しやすく（`echo` や
+    対話入力の Enter）、それに気づけないまま「正しい合言葉が通らない」状態に
+    なるため。利用者の入力側も同じく strip している。
+    """
     from_env = os.environ.get(ENV_PASSWORD)
-    if from_env:
-        return from_env
+    if from_env and from_env.strip():
+        return from_env.strip()
     try:  # ローカルで .streamlit/secrets.toml を使いたい場合の補助
         value = st.secrets.get(ENV_PASSWORD)  # type: ignore[union-attr]
     except Exception:  # secrets.toml が無い環境では例外になる
         return None
-    return str(value) if value else None
+    return str(value).strip() if value and str(value).strip() else None
 
 
 def _gate(password: str) -> None:

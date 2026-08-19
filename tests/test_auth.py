@@ -60,3 +60,13 @@ def test_container_without_secret_refuses_to_serve(tables, monkeypatch):
     at = AppTest.from_file(APP, default_timeout=60).run()
     assert not at.metric
     assert any("合言葉が設定されていません" in e.value for e in at.error)
+
+
+def test_trailing_newline_in_secret_is_tolerated(tables, monkeypatch):
+    """シークレット登録時に混入しがちな改行で締め出されないこと。"""
+    monkeypatch.setenv("DASHBOARD_PASSWORD", "protofes-2026\n")
+    at = AppTest.from_file(APP, default_timeout=60).run()
+    at.text_input[0].set_value("protofes-2026").run()
+    at.button[0].click().run()
+    assert not at.exception
+    assert at.metric
