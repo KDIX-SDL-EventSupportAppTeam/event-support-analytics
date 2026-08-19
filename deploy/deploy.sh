@@ -10,7 +10,9 @@
 # リポジトリにも、このスクリプトにも、コマンド履歴にも平文を残さない。
 set -euo pipefail
 
-PROJECT="${PROJECT:-protofes}"
+# デプロイ先。データの抽出元（protofes）とは別のプロジェクトでよい。
+# この画面は Firestore に接続せず、焼き込んだ CSV だけを読むため。
+PROJECT="${PROJECT:-event-support-app}"
 REGION="${REGION:-asia-northeast1}"
 SERVICE="${SERVICE:-protofes-dashboard}"
 SECRET="${SECRET:-dashboard-password}"

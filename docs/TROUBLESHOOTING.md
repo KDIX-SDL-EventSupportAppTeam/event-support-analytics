@@ -33,7 +33,7 @@
 3. サーバー側のログも見る。トレースは stderr にも出しているので Cloud Logging に残る
 
 ```bash
-gcloud run services logs read protofes-dashboard --region asia-northeast1 --limit 50
+gcloud run services logs read protofes-dashboard --region asia-northeast1 --project event-support-app --limit 50
 ```
 
 レポート番号で対応するアクセスを絞り込むことはできない（番号はブラウザ側だけの識別子）。

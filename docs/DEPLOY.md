@@ -18,6 +18,10 @@
 Firestore へは接続しない。コンテナが読むのは焼き込まれた CSV だけである
 （「Firestore へのアクセスは抽出時の一度きり」という AGENTS.md の規則を守るため）。
 
+**デプロイ先は `event-support-app`（今年のチームのプロジェクト）。**
+データの抽出元である `protofes` は先輩世代のプロジェクトであり、
+新しいリソースも課金も足さない。接続しない以上、置き場所は分けてよい。
+
 ## 手順
 
 ### 1. データを用意する
@@ -46,7 +50,7 @@ bash deploy/deploy.sh
 プロジェクトやサービス名を変えたいときは環境変数で上書きする:
 
 ```bash
-PROJECT=protofes REGION=asia-northeast1 SERVICE=protofes-dashboard bash deploy/deploy.sh
+PROJECT=event-support-app REGION=asia-northeast1 SERVICE=protofes-dashboard bash deploy/deploy.sh
 ```
 
 ### 3. 運営メンバーへ渡す
@@ -63,7 +67,7 @@ bash deploy/deploy.sh --set-password
 ### 公開をやめる
 
 ```bash
-gcloud run services delete protofes-dashboard --region asia-northeast1 --project protofes
+gcloud run services delete protofes-dashboard --region asia-northeast1 --project event-support-app
 ```
 
 ## ローカルでの動作確認
