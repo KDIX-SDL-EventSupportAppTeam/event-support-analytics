@@ -1,7 +1,7 @@
 # ダッシュボードを共有する（Cloud Run へのデプロイ）
 
 同じ GCP プロジェクトに入っていない運営メンバーへ、
-[`src/dashboard.py`](../src/dashboard.py) の画面を URL で共有するための手順。
+[`src/dashboard.py`](../../src/dashboard.py) の画面を URL で共有するための手順。
 
 **アクセス制御は「共有の合言葉」1つのみ**である。強度と限界は末尾に書く。
 
@@ -99,7 +99,7 @@ SUPPORT_CONTACT="開発担当（Slack: @akihide）" bash deploy/deploy.sh
 ```
 
 指定しない場合は「この画面を共有した担当者」と表示される。
-利用者が送ってくる内容については [TROUBLESHOOTING.md](operations/troubleshooting.md) を参照。
+利用者が送ってくる内容については [TROUBLESHOOTING.md](troubleshooting.md) を参照。
 
 ## この認証の強度と限界
 
@@ -122,6 +122,6 @@ SUPPORT_CONTACT="開発担当（Slack: @akihide）" bash deploy/deploy.sh
 - イメージには **302名分の仮名化済み行動履歴が含まれる**。
   Artifact Registry のリポジトリを公開設定にしないこと
 - 含まれないもの: メールアドレス、パスワードハッシュ、仮名IDと本人の対応表
-  （[privacy-policy.md](specs/analytics-pipeline/03-extraction/privacy-policy.md) により抽出時点で破棄済み）
+  （[privacy-policy.md](../specs/analytics-pipeline/03-extraction/privacy-policy.md) により抽出時点で破棄済み）
 - 画面には3名未満の絞り込み結果を出さない仕組み（小セル抑制）が入っている。
   誰がどう絞り込んでも、個人が特定される粒度までは表示されない
