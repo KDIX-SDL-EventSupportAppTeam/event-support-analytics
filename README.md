@@ -9,7 +9,7 @@
 |---|---|
 | [docs/FINDINGS.md](docs/FINDINGS.md) | **分析結果サマリ**。5つの問いへの回答と全指標の実測値 |
 | [docs/PURPOSE.md](docs/PURPOSE.md) | **このリポジトリの存在意義**。最初に読む |
-| [docs/.sdd/](docs/.sdd/) | 仕様書（意味単位で分割） |
+| [docs/specs/analytics-pipeline/](docs/specs/analytics-pipeline/) | 仕様書（意味単位で分割） |
 | [AGENTS.md](AGENTS.md) | 作業指針・絶対規則 |
 
 ## 使い方
@@ -30,18 +30,18 @@ streamlit run src/dashboard.py
 ### GUI ダッシュボード
 
 `streamlit run src/dashboard.py` でブラウザが開き、絞り込みながら結果を確認できる。
-運営メンバーへ URL で共有する手順（Cloud Run + 合言葉）は [docs/DEPLOY.md](docs/DEPLOY.md) を参照。
+運営メンバーへ URL で共有する手順（Cloud Run + 合言葉）は [docs/operations/deploy.md](docs/operations/deploy.md) を参照。
 
 - **絞り込み**: 開催日（両日／金／土）、年代、性別、興味ジャンル、
   チェックイン0件・単発訪問者の包含/除外、運営・出展者の pid 除外
 - **タブ**: 5つの判断ごとに1タブ＋推薦マスの効果＋クールタイム（前提確認）＋除外候補
 - **自動判定**: 絞り込み結果を
-  [判断基準](docs/.sdd/01-context/decision-criteria.md) の事前固定しきい値に
+  [判断基準](docs/specs/analytics-pipeline/01-context/decision-criteria.md) の事前固定しきい値に
   当てはめて表示する（例: 30分未満が34.7% →「二層構造」）
 
 ローカルの `data/tables/` を読むだけで、個人データを含むファイルを新たに生成しない。
 該当者が3名未満になる絞り込みでは、属性の組み合わせから個人が推定されうるため
-集計を表示しない（[プライバシー方針](docs/.sdd/03-extraction/privacy-policy.md)）。
+集計を表示しない（[プライバシー方針](docs/specs/analytics-pipeline/03-extraction/privacy-policy.md)）。
 
 除外規則2（運営・出展者候補）の一覧だけを確認したい場合:
 
@@ -75,4 +75,4 @@ python -m pytest tests/
 
 `data/` 以下には302名分の行動履歴が置かれる。**コミットしないこと**
 （`.gitignore` で除外済み）。
-詳細は [プライバシー方針](docs/.sdd/03-extraction/privacy-policy.md)。
+詳細は [プライバシー方針](docs/specs/analytics-pipeline/03-extraction/privacy-policy.md)。

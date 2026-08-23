@@ -1,55 +1,32 @@
-# AGENTS.md
+# event-support-analytics
 
-## このリポジトリについて
+2025年 第3回プロトフェスの来場者行動データを分析し、2026年のアプリの設計判断を根拠づける。
+**分析結果だけ知りたいなら [docs/FINDINGS.md](docs/FINDINGS.md) を読めばよい。**
 
-**分析結果だけ知りたい場合は [docs/FINDINGS.md](docs/FINDINGS.md) を読めばよい。**
-5つの問いへの回答・全指標の実測値・結果を誤読しないための制約がまとまっている。
+## 最初に読むもの
 
-**まず [docs/PURPOSE.md](docs/PURPOSE.md) を読むこと。** リポジトリの存在意義と、
-最終的に答えるべき5つの問いが書かれている。
+| 知りたいこと | 見る場所 |
+|---|---|
+| このリポジトリの存在意義 | [docs/PURPOSE.md](docs/PURPOSE.md) |
+| 分析結果 | [docs/FINDINGS.md](docs/FINDINGS.md) |
+| 仕様 | [docs/specs/](docs/specs/README.md) |
+| 守ること | [docs/rules/](docs/rules/README.md) — Git・データの扱い・ドキュメント |
+| 動かし方 | [README.md](README.md) · [docs/operations/](docs/operations/README.md) |
 
-一行で言えば、**2025年の第3回プロトフェスで蓄積された来場者行動データを分析し、
-2026年のイベント支援アプリの設計判断を根拠づけるためのリポジトリ**である。
+着手前に最低限この3つを読む。
 
-## 仕様書
+1. [背景](docs/specs/analytics-pipeline/01-context/background.md) — 去年と今年の差分
+2. [Firestore スキーマ](docs/specs/analytics-pipeline/02-data-source/firestore-schema.md)
+3. [交絡要因](docs/specs/analytics-pipeline/04-analysis/confounders.md) — **これを読まずに結果を解釈しない**
 
-仕様は `docs/.sdd/` 以下に意味単位で分割されている。
-**実装より先に仕様を確定させ、実装は仕様に従う。**
+## 絶対に守ること
 
-全体像と読む順序は [docs/.sdd/README.md](docs/.sdd/README.md) を参照。
+1. **個人データを保存しない。** 仮名 ID へ置換し、対応表を作らない。`data/` はコミットしない
+2. **Firestore は読み取り専用、接続は抽出時の一度だけ**（[rules/data-handling.md](docs/rules/data-handling.md)）
+3. **`main` を直接触らない。** 作業ブランチ → `develop` へ PR（[rules/git.md](docs/rules/git.md)）
+4. **指標の算出式は `metrics.py` にだけ書く。** GUI・図表から呼ぶ。二重管理しない
 
-初見であれば、最低限この3つを読んでから作業を始めること。
-
-1. [docs/.sdd/01-context/background.md](docs/.sdd/01-context/background.md) — 去年と今年の差分
-2. [docs/.sdd/02-data-source/firestore-schema.md](docs/.sdd/02-data-source/firestore-schema.md) — データ構造
-3. [docs/.sdd/04-analysis/confounders.md](docs/.sdd/04-analysis/confounders.md) — **交絡要因。これを読まずに結果を解釈しない**
-
-## 作業上の絶対規則
-
-### データの扱い
-
-- **メールアドレスとパスワードハッシュを保存しない。**
-  抽出時に仮名ID（`u0001` 形式）へ置換する。対応表は生成しない
-- **`data/` をコミットしない。** 302名分の行動履歴はバージョン管理下に置かない
-- 集計済みの結果（`output/`）はコミットしてよい
-
-詳細: [docs/.sdd/03-extraction/privacy-policy.md](docs/.sdd/03-extraction/privacy-policy.md)
-
-### GCPへのアクセス
-
-- **Firestore へのアクセスは抽出時の一度だけ。** 以降はローカルファイルのみで作業する
-- **読み取り専用。** 書き込みAPIを呼ぶコードを書かない
-- 接続先は `protofes` プロジェクトの `(default)` データベース
-  （`protofest-test1` / `test2` はイベント後のクローンであり本番ではない）
-
-詳細: [docs/.sdd/02-data-source/database-inventory.md](docs/.sdd/02-data-source/database-inventory.md)
-
-### 去年のリポジトリ
-
-`HidetsuguSuto/2025_P3_supporters_game` は先輩世代の資産である。
-push 権限はあるが、**読み取り専用として扱い、一切変更しない。**
-
-## 間違えやすい点（頻出）
+## 間違えやすい点
 
 | 落とし穴 | 正しい扱い |
 |---|---|
@@ -57,36 +34,9 @@ push 権限はあるが、**読み取り専用として扱い、一切変更し�
 | 去年は2日開催、今年は1日 | 分析単位は「ユーザー × 日」。302名は延べ人数 |
 | クールタイムが期間中に変更された | チェックイン間隔の下限が動く。データから変更点を検出する |
 | 同一ブースへの再訪問は記録されない | ユニーク訪問数とチェックイン総数は常に一致 |
-| ブースIDは丸数字（`①`〜`㊶`） | Unicode 上で不連続。ソートには `booth_no`（整数）を使う |
+| ブース ID は丸数字（`①`〜`㊶`） | Unicode 上で不連続。ソートには `booth_no`（整数）を使う |
 | ブース数は42ではなく **40** | 21番と42番は欠番。去年のコードのコメントが誤り |
 
 ## 環境
 
-- Python 3.13
-- `google-cloud-firestore` 2.21.0
-- 認証は ADC（`gcloud auth application-default login`）
-
-## 現在の状態
-
-`src/` 以下に一通りの実装が揃っている。
-
-| スクリプト | 役割 | 仕様 |
-|---|---|---|
-| `dump_firestore.py` | Firestoreからの一括抽出・仮名化 | [dump-spec.md](docs/.sdd/03-extraction/dump-spec.md) |
-| `build_tables.py` | 中間テーブル生成・除外規則の適用 | [intermediate-tables.md](docs/.sdd/04-analysis/intermediate-tables.md) / [exclusion-rules.md](docs/.sdd/03-extraction/exclusion-rules.md) |
-| `metrics.py` | 指標カタログ(A〜F)・クールタイム床検出 | [metrics-catalog.md](docs/.sdd/04-analysis/metrics-catalog.md) / [confounders.md](docs/.sdd/04-analysis/confounders.md) |
-| `visualize.py` | 判断に直結する図表の生成（PNG） | [chart-spec.md](docs/.sdd/05-visualization/chart-spec.md) |
-| `dashboard.py` | 絞り込み可能なGUI（Streamlit） | 上記2つと同じ。指標は `metrics.py` を経由し再実装しない |
-| `auth.py` | 共有用の合言葉によるアクセス制限 | [DEPLOY.md](docs/DEPLOY.md) |
-| `report.py` | 停止時に、利用者が担当者へ転送できる不具合レポートを表示 | [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) |
-| `run_pipeline.py` | 2〜4を一括実行するエントリポイント | — |
-
-**指標の算出式を `dashboard.py` や `visualize.py` に書かないこと。**
-必ず `metrics.py` に置き、GUI・図表の双方から呼ぶ。仕様の二重管理を避けるため。
-絞り込み済みのフレームを渡す場合は `day=None` で呼べばよい。
-
-**まだ Firestore からの実データ抽出・実行検証は行っていない。**
-`tests/` の合成データによるユニットテストのみで検証済み。
-実データで実行した際、仕様上「実データを見てから確定する」とされている項目
-（[confounders.md](docs/.sdd/04-analysis/confounders.md) 末尾の表）に
-食い違いが出た場合は、該当する仕様書を更新すること。
+Python 3.13 / `google-cloud-firestore` 2.21.0 / 認証は ADC（`gcloud auth application-default login`）

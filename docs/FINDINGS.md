@@ -1,7 +1,7 @@
 # 分析結果サマリ（2025年 第3回プロトフェス）
 
 **このファイルだけ読めば設計判断ができるように書いてある。**
-数値の出典は `output/metrics.json`、算出定義は [.sdd/04-analysis/metrics-catalog.md](.sdd/04-analysis/metrics-catalog.md)。
+数値の出典は `output/metrics.json`、算出定義は [specs/analytics-pipeline/04-analysis/metrics-catalog.md](specs/analytics-pipeline/04-analysis/metrics-catalog.md)。
 
 | 項目 | 値 |
 |---|---|
@@ -272,7 +272,7 @@
 | 4 | クールタイムの実際の変更時刻 | `output/figures/cooldown_floor.png` の段差から特定可能。未確定 |
 
 項目2・3は、抽出漏れではなく
-[database-inventory.md](.sdd/02-data-source/database-inventory.md) の実測値が
+[database-inventory.md](specs/analytics-pipeline/02-data-source/database-inventory.md) の実測値が
 2026-08時点のもので、その後もテストアカウントの増減があったためと考えられる。
 分析結論に影響する規模ではない。
 
