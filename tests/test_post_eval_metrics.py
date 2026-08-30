@@ -8,12 +8,24 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import post_eval_metrics as pem  # noqa: E402
+import rec_db  # noqa: E402
 import synth_rec_data as synth  # noqa: E402
 
 
 @pytest.fixture(scope="module")
 def tables():
-    return synth.generate(n_users=110, recommender_dead=False, split_started=True)
+    """合成データを、画面と同じ経路（rec_db.load_tables）で整えてから渡す。
+
+    合成データは実スキーマどおり card_unlock_events に user_id を持たないので、
+    rec_db を通さずに使うと本番と違う形をテストしてしまう。
+    """
+    raw = synth.generate(n_users=110, recommender_dead=False, split_started=True)
+
+    class _InMemory:
+        def table(self, name):
+            return raw[name]
+
+    return rec_db.load_tables(_InMemory())
 
 
 def test_ecdf_is_monotonic_and_ends_at_one():

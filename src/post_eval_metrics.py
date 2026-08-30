@@ -115,9 +115,13 @@ def interest_match_funnel(recommendation_scores: pd.DataFrame, check_ins: pd.Dat
     m = scores.merge(ci, on=["user_id", "booth_id"], how="left")
     m["visited"] = m["visited"].fillna(False)
 
-    # 評価: チェックイン→booth_ratings を checkin_id で辿る
-    ci_full = check_ins[["id", "user_id", "booth_id"]].rename(columns={"id": "checkin_id"})
-    rated = booth_ratings.merge(ci_full, on="checkin_id", how="inner")
+    # booth_ratings は実スキーマで user_id / booth_id を直接持つ。
+    # 持たない入力（古いダンプ等）のときだけ checkin_id で辿る。
+    if {"user_id", "booth_id"}.issubset(booth_ratings.columns):
+        rated = booth_ratings
+    else:
+        ci_full = check_ins[["id", "user_id", "booth_id"]].rename(columns={"id": "checkin_id"})
+        rated = booth_ratings.merge(ci_full, on="checkin_id", how="inner")
     rated_pairs = rated.groupby(["user_id", "booth_id"])["rating"].max().rename("rating").reset_index()
     m = m.merge(rated_pairs, on=["user_id", "booth_id"], how="left")
 
@@ -257,9 +261,7 @@ def participant_timeline(user_id: str, check_ins: pd.DataFrame, recommendation_s
     events: list[tuple[pd.Timestamp, str, str]] = []
 
     ci = check_ins[check_ins["user_id"] == user_id]
-    rby = booth_ratings.merge(
-        check_ins[["id", "user_id"]].rename(columns={"id": "checkin_id"}), on="checkin_id", how="inner")
-    rating_by_checkin = rby.set_index("checkin_id")["rating"].to_dict()
+    rating_by_checkin = booth_ratings.set_index("checkin_id")["rating"].to_dict()
     for _, r in ci.iterrows():
         rating = rating_by_checkin.get(r.get("id"))
         cell = "カード外" if pd.isna(r["cell_id"]) else f"マス{r['cell_id']}"

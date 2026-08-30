@@ -39,13 +39,11 @@ DEFAULT_SOURCE_DIR = os.environ.get("REC_DATA_DIR", "data/synth")
 
 @st.cache_data
 def load(source_dir: str) -> dict[str, pd.DataFrame]:
-    src = rec_db.DumpSource(source_dir)
-    names = ["check_ins", "recommendation_scores", "booth_ratings", "card_unlock_events",
-             "bingo_cells", "users"]
-    t = {n: src.table(n) for n in names}
-    for n in ("check_ins", "recommendation_scores", "card_unlock_events"):
-        t[n] = rec_db.participants_only(t[n], t["users"])
-    return t
+    """取得の作法（card_id の解決・イベント絞り込み・スタッフ除外）は rec_db に集約する。"""
+    return rec_db.load_tables(
+        rec_db.DumpSource(source_dir),
+        ("check_ins", "recommendation_scores", "booth_ratings", "card_unlock_events", "bingo_cells"),
+    )
 
 
 @st.cache_data

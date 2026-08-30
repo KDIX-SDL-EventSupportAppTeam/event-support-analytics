@@ -58,15 +58,11 @@ def to_jst(ts):
 
 @st.cache_data(ttl=REFRESH_SEC)
 def load_tables(source_dir: str) -> dict[str, pd.DataFrame]:
-    src = rec_db.SynthSource(source_dir)
-    names = ["card_unlock_events", "check_ins", "booth_ratings", "recommendation_scores",
-             "bingo_cells", "users"]
-    tables = {n: src.table(n) for n in names}
-    users = tables["users"]
-    for key, col in [("card_unlock_events", "user_id"), ("check_ins", "user_id"),
-                     ("recommendation_scores", "user_id")]:
-        tables[key] = rec_db.participants_only(tables[key], users, user_col=col)
-    return tables
+    """取得の作法（card_id の解決・イベント絞り込み・スタッフ除外）は rec_db に集約する。"""
+    return rec_db.load_tables(
+        rec_db.SynthSource(source_dir),
+        ("card_unlock_events", "check_ins", "booth_ratings", "recommendation_scores", "bingo_cells"),
+    )
 
 
 def load_ops_state(source_dir: str, url: str) -> dict | None:

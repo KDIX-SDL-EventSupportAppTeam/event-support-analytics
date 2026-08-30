@@ -23,6 +23,11 @@ import pandas as pd
 
 INTEREST_MATCH = ["MATCH", "PARTIAL", "MISMATCH", "UNKNOWN"]
 EVENT_DAY = pd.Timestamp("2026-10-16 09:00:00", tz="Asia/Tokyo").tz_convert("UTC")
+EVENT_ID = "evt-2026-protofes4"
+
+# 列は event-support-server の db/create-tables.sql に合わせる。
+# とくに card_unlock_events / bingo_cells は **user_id を持たない**（card_id 経由）。
+# ここを実物とずらすと、SqlSource へ差し替えた瞬間に全部壊れる。
 
 
 def generate(n_users: int = 110, seed: int = 20261016, *, recommender_dead: bool = False,
@@ -42,10 +47,18 @@ def generate(n_users: int = 110, seed: int = 20261016, *, recommender_dead: bool
     })
     booth_ids = booths["id"].tolist()
 
+    cards = pd.DataFrame({
+        "id": [f"card-{u}" for u in participant_ids],
+        "event_id": EVENT_ID,
+        "user_id": participant_ids,
+    })
+    card_of = dict(zip(participant_ids, cards["id"]))
+
     check_ins, unlock_events, scores, ratings, cells = [], [], [], [], []
     checkin_seq = 0
 
     for uidx, uid in enumerate(participant_ids):
+        card_id = card_of[uid]
         arrival = EVENT_DAY + pd.Timedelta(minutes=int(rng.integers(60, 360)))
         n_visits = int(np.clip(rng.poisson(7), 1, 20))
         # チェックイン
@@ -59,13 +72,14 @@ def generate(n_users: int = 110, seed: int = 20261016, *, recommender_dead: bool
             user_checkin_ids.append((cid, b))
             on_card = rng.random() > 0.25
             check_ins.append({
-                "id": cid, "user_id": uid, "booth_id": b,
-                "cell_id": (order if on_card else None),
+                "id": cid, "user_id": uid, "booth_id": b, "event_id": EVENT_ID,
+                "cell_id": (f"cell-{card_id}-{order}" if on_card else None),
                 "visit_order": order, "checked_in_at": t.isoformat(),
             })
             if rng.random() < 0.32:  # 評価回収率 ~32%
                 ratings.append({
-                    "checkin_id": cid, "rating": int(rng.integers(1, 5)), "scale": 4,
+                    "checkin_id": cid, "user_id": uid, "booth_id": b, "event_id": EVENT_ID,
+                    "rating": int(rng.integers(1, 5)), "scale": 4,
                     "rated_at": (t + pd.Timedelta(minutes=1)).isoformat(),
                 })
 
@@ -80,8 +94,10 @@ def generate(n_users: int = 110, seed: int = 20261016, *, recommender_dead: bool
                 strategy = "FALLBACK_COVERAGE"
             else:
                 strategy = "FALLBACK_COVERAGE" if rng.random() < 0.05 else "RECOMMEND"
+            unlock_id = f"unlock-{card_id}-{k}"
             unlock_events.append({
-                "user_id": uid, "strategy": strategy, "phase": phase,
+                "id": unlock_id, "card_id": card_id,  # user_id は持たない（実スキーマ）
+                "strategy": strategy, "phase": phase,
                 "decision_table_size": table_size,
                 "global_checkin_count": checkin_seq, "created_at": ut.isoformat(),
             })
@@ -99,6 +115,7 @@ def generate(n_users: int = 110, seed: int = 20261016, *, recommender_dead: bool
                     attributes["split_seed"] = f"{uid}-{k}"
                 reason = {"rules": [{"id": f"R{int(rng.integers(1, 15))}"}]} if in_drsa else {}
                 scores.append({
+                    "id": f"score-{unlock_id}-{ci_}", "unlock_event_id": unlock_id,
                     "user_id": uid, "booth_id": b, "was_assigned": assigned,
                     "score": round(float(sc_val), 3),
                     "rank_in_event": ci_ + 1,
@@ -108,14 +125,17 @@ def generate(n_users: int = 110, seed: int = 20261016, *, recommender_dead: bool
                     "created_at": ut.isoformat(),
                 })
                 revealed = 1 if assigned else 0
+                position = len(cells) % 16
                 cells.append({
-                    "user_id": uid, "booth_id": (b if revealed else None),
-                    "is_revealed": revealed, "is_achieved": 0, "source": "unlock",
+                    "id": f"cell-{card_id}-{len(cells)}", "card_id": card_id,  # user_id は持たない
+                    "position": position, "booth_id": (b if revealed else None),
+                    "is_revealed": revealed, "is_achieved": 0, "source": "RECOMMEND",
                 })
 
     tables = {
         "users": users,
         "booths": booths,
+        "bingo_cards": cards,
         "check_ins": pd.DataFrame(check_ins),
         "card_unlock_events": pd.DataFrame(unlock_events),
         "recommendation_scores": pd.DataFrame(scores),
