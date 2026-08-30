@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -150,7 +151,13 @@ class OpsStateClient:
         self.timeout_sec = timeout_sec
 
     def fetch(self) -> dict | None:
-        """成功時 dict、失敗時 None。例外は投げない。"""
+        """成功時 dict、失敗時 None。**どんな失敗でも例外を投げない。**
+
+        推薦エンジンが死にかけのとき（再起動中・OOM 直前）は、接続不能だけでなく
+        不正な HTTP レスポンス（`http.client.BadStatusLine` など）も返しうる。
+        エンジンが最も怪しいまさにその瞬間に監視が消えては意味がないので、
+        Exception まで広く捕まえる（02 §1）。
+        """
         if not self.base_url:
             return None
         url = f"{self.base_url}/ops/state"
@@ -158,6 +165,9 @@ class OpsStateClient:
             with urllib.request.urlopen(url, timeout=self.timeout_sec) as resp:  # noqa: S310
                 if resp.status != 200:
                     return None
-                return json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+                payload = json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ValueError, OSError):
             return None
+        except Exception:  # noqa: BLE001 - 監視を落とさないことを最優先する
+            return None
+        return payload if isinstance(payload, dict) else None

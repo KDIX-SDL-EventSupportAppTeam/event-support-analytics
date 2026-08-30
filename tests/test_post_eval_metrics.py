@@ -74,6 +74,22 @@ def test_funnel_uses_frozen_interest_match_not_recomputed():
     assert mismatch["presented"] == 1 and mismatch["visited"] == 1 and mismatch["high"] == 1
 
 
+def test_funnel_yields_are_none_not_nan_when_denominator_zero():
+    """提示0のとき歩留まりは None。画面側はこれを数値化して整形する（object dtype 対策）。"""
+    empty = pd.DataFrame(columns=[
+        "user_id", "booth_id", "was_assigned", "score", "interest_match",
+        "attributes", "reason_payload", "created_at"])
+    f = pem.interest_match_funnel(
+        empty, pd.DataFrame(columns=["id", "user_id", "booth_id", "cell_id"]),
+        pd.DataFrame(columns=["checkin_id", "rating", "scale"]))
+    assert (f["presented"] == 0).all()
+    assert f["visit_yield"].isna().all()
+    # 画面側の整形（post_analysis.fig3_funnel と同じ式）が例外にならないこと
+    formatted = pd.to_numeric(f["visit_yield"], errors="coerce").map(
+        lambda v: "—" if pd.isna(v) else f"{v * 100:.1f}%")
+    assert list(formatted) == ["—"] * 4
+
+
 def test_assigned_scores_rank_above_unassigned(tables):
     out = pem.assigned_vs_unassigned_scores(tables["recommendation_scores"])
     assert out["sanity_ok"] is True

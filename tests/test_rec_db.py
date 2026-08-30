@@ -1,3 +1,4 @@
+import http.client
 import sys
 from pathlib import Path
 
@@ -49,3 +50,34 @@ def test_ops_state_client_returns_none_without_url():
 def test_ops_state_client_swallows_connection_errors():
     # 到達不能ポート。例外を投げず None を返す（02 §1）
     assert rec_db.OpsStateClient("http://127.0.0.1:1").fetch() is None
+
+
+@pytest.mark.parametrize("exc", [
+    http.client.BadStatusLine("garbage"),
+    http.client.IncompleteRead(b""),
+    RuntimeError("想定外"),
+])
+def test_ops_state_client_swallows_malformed_http_response(monkeypatch, exc):
+    """エンジンが死にかけで不正な HTTP レスポンスを返しても監視を落とさない（02 §1）。"""
+    def boom(*_a, **_k):
+        raise exc
+
+    monkeypatch.setattr(rec_db.urllib.request, "urlopen", boom)
+    assert rec_db.OpsStateClient("http://example.invalid").fetch() is None
+
+
+def test_ops_state_client_rejects_non_dict_payload(monkeypatch):
+    class _Resp:
+        status = 200
+
+        def read(self):
+            return b"[1, 2, 3]"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    monkeypatch.setattr(rec_db.urllib.request, "urlopen", lambda *_a, **_k: _Resp())
+    assert rec_db.OpsStateClient("http://example.invalid").fetch() is None

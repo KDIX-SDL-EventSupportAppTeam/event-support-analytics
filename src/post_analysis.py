@@ -101,7 +101,10 @@ def fig3_funnel(t: dict) -> None:
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
     show = f.copy()
     for c in ["visit_yield", "rate_yield", "high_yield"]:
-        show[c] = (show[c] * 100).round(1).astype(str) + "%"
+        # 分母0のとき _ratio は None を返す。列が全て None だと object dtype になり
+        # 乗算が TypeError になるため、数値化してから整形する
+        show[c] = pd.to_numeric(show[c], errors="coerce").map(
+            lambda v: "—" if pd.isna(v) else f"{v * 100:.1f}%")
     st.dataframe(show, hide_index=True)
     st.caption("MISMATCH が研究の主役。『推薦しても行かない』のか『行ったけど気に入らない』のかを分離する（04 §4）。")
 
@@ -146,7 +149,12 @@ def fig7_timeline(t: dict) -> None:
     uid = st.selectbox("参加者", uids)
     tl = pem.participant_timeline(uid, t["check_ins"], t["recommendation_scores"],
                                  t["card_unlock_events"], t["booth_ratings"])
-    st.dataframe(pd.DataFrame(tl), hide_index=True)
+    df = pd.DataFrame(tl)
+    if not df.empty:
+        # 保存は UTC。読むのは JST（AGENTS.md）。仕様 04 §6 の例も JST 表記
+        df["at"] = pd.to_datetime(df["at"], utc=True).dt.tz_convert("Asia/Tokyo")
+    st.dataframe(df, hide_index=True, column_config={"at": st.column_config.DatetimeColumn(
+        "時刻（JST）", format="HH:mm:ss")})
 
 
 def main() -> None:

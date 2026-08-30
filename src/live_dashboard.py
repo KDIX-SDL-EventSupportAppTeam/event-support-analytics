@@ -33,6 +33,20 @@ st.set_page_config(page_title="推薦の当日監視", layout="wide", page_icon=
 _LEVEL_COLOR = {lm.GREEN: "#16a34a", lm.YELLOW: "#d97706", lm.RED: "#dc2626", lm.UNKNOWN: "#64748b"}
 _LEVEL_MARK = {lm.GREEN: "🟢", lm.YELLOW: "🟡", lm.RED: "🔴", lm.UNKNOWN: "⚪"}
 REFRESH_SEC = 45
+JST = "Asia/Tokyo"
+
+
+def to_jst(ts):
+    """UTC 保存の時刻を JST(+9) へ変換する。**画面に出す時刻は必ずこれを通す。**
+
+    当日は暗算する余裕が無い（03 §0）。運営が見る時刻と手元の時計を一致させる。
+    Series / Timestamp のどちらでも受ける。
+    """
+    if isinstance(ts, pd.Series):
+        return pd.to_datetime(ts, utc=True).dt.tz_convert(JST)
+    ts = pd.Timestamp(ts)
+    ts = ts.tz_localize("UTC") if ts.tzinfo is None else ts
+    return ts.tz_convert(JST)
 
 
 @st.cache_data(ttl=REFRESH_SEC)
@@ -49,12 +63,21 @@ def load_tables(source_dir: str) -> dict[str, pd.DataFrame]:
 
 
 def load_ops_state(source_dir: str, url: str) -> dict | None:
+    """`/ops/state` の取得。**取れないことをもって画面全体を落とさない**（02 §1）。
+
+    URL 未指定ならローカルの `ops_state.json`（リハーサル用）を読む。読めない・壊れて
+    いる場合は None を返し、該当欄だけが「取得不能」になる。
+    """
     if url:
         return rec_db.OpsStateClient(url).fetch()
     p = Path(source_dir) / "ops_state.json"
-    if p.exists():
-        return json.loads(p.read_text(encoding="utf-8"))
-    return None
+    if not p.exists():
+        return None
+    try:
+        payload = json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def signal_card(sig: lm.Signal) -> None:
@@ -84,7 +107,7 @@ def render(source_dir: str, ops_url: str) -> None:
         return
     ops = load_ops_state(source_dir, ops_url)
 
-    st.caption(f"最終更新 {pd.Timestamp.now():%H:%M:%S}　/　{REFRESH_SEC}秒ごとに自動更新"
+    st.caption(f"最終更新 {to_jst(now):%H:%M:%S} JST　/　{REFRESH_SEC}秒ごとに自動更新"
                f"　/　データ源: 合成（{source_dir}）")
 
     board = lm.signal_board(t["card_unlock_events"], t["check_ins"], t["booth_ratings"], ops, now)
@@ -99,20 +122,22 @@ def render(source_dir: str, ops_url: str) -> None:
             signal_card(sig)
 
     st.divider()
-    st.markdown("### 当日の時系列（1枚に重ねる）")
+    st.markdown("### 当日の時系列（1枚に重ねる・横軸 JST）")
     ts = lm.time_series(t["check_ins"], t["booth_ratings"], t["card_unlock_events"])
     if not ts.empty:
+        x = to_jst(ts["bin"])
         fig = go.Figure()
-        fig.add_scatter(x=ts["bin"], y=ts["cum_checkins"], name="累計チェックイン")
-        fig.add_scatter(x=ts["bin"], y=ts["cum_ratings"], name="累計評価")
-        fig.add_scatter(x=ts["bin"], y=ts["decision_table_size"], name="決定表件数", yaxis="y2")
+        fig.add_scatter(x=x, y=ts["cum_checkins"], name="累計チェックイン")
+        fig.add_scatter(x=x, y=ts["cum_ratings"], name="累計評価")
+        fig.add_scatter(x=x, y=ts["decision_table_size"], name="決定表件数", yaxis="y2")
         for thr in (30, 60):
             fig.add_hline(y=thr, line_dash="dot", line_color="#94a3b8")
         for _, row in lm.phase_change_times(t["card_unlock_events"]).iterrows():
-            fig.add_vline(x=pd.to_datetime(row["created_at"], utc=True), line_color="#6366f1",
+            fig.add_vline(x=to_jst(row["created_at"]), line_color="#6366f1",
                           annotation_text=row["phase"])
         fig.update_layout(yaxis2=dict(overlaying="y", side="right", title="決定表件数"),
-                          height=380, margin=dict(t=20, b=20), legend=dict(orientation="h"))
+                          height=380, margin=dict(t=20, b=20), legend=dict(orientation="h"),
+                          xaxis_title="時刻（JST）")
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
 
     st.divider()
@@ -140,7 +165,7 @@ def render(source_dir: str, ops_url: str) -> None:
         for i, (arm, n) in enumerate(prog["by_arm"].items()):
             pc[i].metric(f"{arm} 枠の提示数", n)
         pc[-1].metric("分割対象の参加者数", prog["n_participants"])
-        st.caption(f"分割発動: {prog['first_split_at']:%H:%M}（JST 換算は +9h）")
+        st.caption(f"分割発動: {to_jst(prog['first_split_at']):%H:%M} JST")
 
 
 def main() -> None:

@@ -48,6 +48,22 @@ def test_live_dashboard_runs_without_ops_state(synth_dir_dead):
     assert any("取得不能" in m.value for m in at.info)
 
 
+def test_live_dashboard_survives_corrupt_ops_state(synth_dir):
+    """壊れた ops_state.json で画面全体を落とさない（02 §1）。"""
+    (synth_dir / "ops_state.json").write_text("{ this is not json", encoding="utf-8")
+    at = _run(LIVE_APP, synth_dir)
+    assert not at.exception
+    assert any("取得不能" in m.value for m in at.info)
+
+
+def test_live_dashboard_shows_times_in_jst(synth_dir):
+    """当日画面に UTC のまま時刻を出さない（AGENTS.md「必ず JST(+9) へ変換」）。"""
+    at = _run(LIVE_APP, synth_dir)
+    captions = " ".join(c.value for c in at.caption)
+    assert "JST" in captions
+    assert "+9h" not in captions  # 暗算を運営に押し付けない
+
+
 def test_post_analysis_runs_on_synth(synth_dir):
     at = _run(POST_APP, synth_dir)
     assert not at.exception
