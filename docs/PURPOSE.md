@@ -31,7 +31,7 @@
 - **本番アプリの実装** — それは `event-support-server` / `event-support-frontend` の役割
 - **去年のリポジトリへの変更** — 読み取りのみ。先輩のリポジトリには一切書き込まない
 - **個人情報の保持** — メールアドレスとパスワードハッシュは抽出時点で破棄する
-  （詳細は [プライバシー方針](.sdd/03-extraction/privacy-policy.md)）
+  （詳細は [プライバシー方針](specs/analytics-pipeline/03-extraction/privacy-policy.md)）
 
 ## 最終的に答えるべき5つの問い
 
@@ -43,12 +43,12 @@
 | 4 | ブース間の訪問偏りに、どれだけ対策コストを割くべきか | 工数配分 |
 | 5 | 開場後どのタイミングでデータが溜まり始めるか | 推薦の起動タイミング設計 |
 
-判断基準の詳細は [判断基準](.sdd/01-context/decision-criteria.md) を参照。
+判断基準の詳細は [判断基準](specs/analytics-pipeline/01-context/decision-criteria.md) を参照。
 
 ## ドキュメントの構成
 
-仕様は `docs/.sdd/` 以下に意味単位で分割されている。
-全体像と読む順序は [.sdd/README.md](.sdd/README.md) を参照。
+仕様は `docs/specs/analytics-pipeline/` 以下に意味単位で分割されている。
+全体像と読む順序は [specs/analytics-pipeline/README.md](specs/analytics-pipeline/README.md) を参照。
 
 ## 重要な前提の変更（必読）
 
@@ -56,4 +56,4 @@
 
 この差は分析全体に影響する。302名という数字は2日間の延べ人数であり、
 今年の規模見積もりと直接比較してはならない。
-詳細は [背景と前提](.sdd/01-context/background.md) を参照。
+詳細は [背景と前提](specs/analytics-pipeline/01-context/background.md) を参照。
