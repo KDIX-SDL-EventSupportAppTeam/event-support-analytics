@@ -38,11 +38,15 @@ streamlit run src/app.py
 | 🚦 推薦の当日監視 | 2026年 当日 | 信号機。壊れていないかを見る |
 | 📈 推薦の事後分析 | 2026年 事後 | 問い1つに図1つ |
 
-合言葉の確認は入口（`src/app.py`）で1回だけ行う。運営メンバーへ URL で共有する手順
-（Cloud Run + 合言葉）は [docs/operations/deploy.md](docs/operations/deploy.md) を参照。
+合言葉の確認は入口（`src/app.py`）で1回だけ行う。**通るまでメニュー自体が出ない。**
+URL で共有する手順（Cloud Run + 合言葉）は [docs/operations/deploy.md](docs/operations/deploy.md) を参照。
 
 個別の画面だけを開くこともできる（開発用）:
 `streamlit run src/dashboard.py` / `src/live_dashboard.py` / `src/post_analysis.py`
+
+> **この画面の読み手はエンジニアである。** 当初は運営メンバー（非エンジニア）が
+> 単独で読めることを優先して作られていたが、2026-08-31 に切り替わった。
+> 平易な言い換えや用語解説が残っているのはその名残である。
 
 - **絞り込み**: 開催日（両日／金／土）、年代、性別、興味ジャンル、
   チェックイン0件・単発訪問者の包含/除外、運営・出展者の pid 除外

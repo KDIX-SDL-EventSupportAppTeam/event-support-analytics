@@ -1,7 +1,11 @@
 # ダッシュボードを共有する（Cloud Run へのデプロイ）
 
-同じ GCP プロジェクトに入っていない運営メンバーへ、
+同じ GCP プロジェクトに入っていないエンジニアへ、
 [`src/app.py`](../../src/app.py) の画面を URL で共有するための手順。
+
+> **読み手はエンジニアである。** この画面は当初、運営メンバー（非エンジニア）に
+> 見てもらう前提で作られていたが、2026-08-31 にエンジニアが確認するものへ切り替わった。
+> 平易な言い換えや用語解説が残っている箇所があるのは、その名残である。
 
 **アクセス制御は「共有の合言葉」1つのみ**である。強度と限界は末尾に書く。
 
@@ -32,7 +36,7 @@
 イメージのビルド時に `synth_rec_data.py` が固定シードで生成する。
 
 当日に実データを見るには、経路が決まったあと `rec_db.SqlSource` の実装が要る。
-それまでは「画面の作りと導線を運営に見てもらう」用途にとどまる。
+それまでは「画面の作りと導線をレビューする」用途にとどまる。
 
 当日監視の画面は45秒ごとに自動更新される。**メニューで別の画面へ移ると更新は止まる。**
 当日はこの画面を開いたままにしておくこと。
@@ -75,10 +79,10 @@ bash deploy/deploy.sh
 PROJECT=event-support-app REGION=asia-northeast1 SERVICE=protofes-dashboard bash deploy/deploy.sh
 ```
 
-### 3. 運営メンバーへ渡す
+### 3. 確認する人へ渡す
 
 URL と合言葉を渡す。**2つは別の経路で送る**こと（例: URL は Slack、合言葉は口頭）。
-メンバー側は URL を開き、合言葉を入力するだけでよい。GCP のアカウントは要らない。
+受け取る側は URL を開き、合言葉を入力するだけでよい。GCP のアカウントは要らない。
 
 ### 合言葉だけを変える（メンバーが抜けたときなど）
 
@@ -94,35 +98,97 @@ gcloud run services delete protofes-dashboard --region asia-northeast1 --project
 
 ## ローカルでの動作確認
 
-合言葉を設定しなければ、これまで通り認証なしで起動する。
-デプロイ版と同じ3画面を出すには統合アプリを起動する。
+### 統合アプリを起動する
+
+デプロイ版と同じ3画面が出る。合言葉を設定しなければ認証なしで起動する。
 
 ```bash
 streamlit run src/app.py
 ```
 
-推薦の2画面は合成データを読む。無ければ先に作る。
+左のサイドバー上部の「画面」メニューで行き来する。
+
+| メニュー | パス | 読むデータ |
+|---|---|---|
+| 📊 去年の行動データ | `/last-year`（既定） | `data/tables/*.csv` |
+| 🚦 推薦の当日監視 | `/live` | `data/synth`（合成） |
+| 📈 推薦の事後分析 | `/post` | `data/synth` ＋ `data/tables`（図①の去年比較） |
+
+### 合成データを用意する
+
+推薦の2画面が読む。無ければ先に作る（固定シードなので何度でも同じものが出る）。
 
 ```bash
 python src/synth_rec_data.py --out data/synth
 ```
 
-合言葉つきの画面を手元で確認したいとき:
+推薦エンジンが死んでいる状態も作れる。**リハーサルではこちらも必ず通すこと**
+（[仕様 03](../specs/recommendation-evaluation/03-live-dashboard.md) §6）。
+サイドバーのディレクトリを `data/synth_dead` に変えると、フォールバック率が 🔴 になり、
+`/ops/state` の欄が「取得不能」でも他の指標が動き続けることを確認できる。
+
+```bash
+python src/synth_rec_data.py --out data/synth_dead --recommender-dead --no-ops-state
+```
+
+### 合言葉つきで確認する（デプロイ版と同じ挙動）
+
+**合言葉を入れるまでメニュー自体が出ない**こと（＝どの画面にも入れないこと）を確認する。
 
 ```bash
 DASHBOARD_PASSWORD=test1234 streamlit run src/app.py
 ```
 
-個別の画面だけを開きたいとき（開発用。`src/app.py` を通さなくても動く）:
+PowerShell では環境変数の渡し方が違う。
+
+```powershell
+$env:DASHBOARD_PASSWORD="test1234"; streamlit run src/app.py
+```
+
+### 個別の画面だけを開く（開発用）
+
+`src/app.py` を通さなくても単体で動く。認証・エラーレポート画面も同じように効く。
+
+```bash
+streamlit run src/dashboard.py
+```
 
 ```bash
 streamlit run src/live_dashboard.py
 ```
 
-コンテナごと確認したいとき:
+```bash
+streamlit run src/post_analysis.py
+```
+
+### コンテナごと確認する（デプロイ直前）
+
+イメージ内で合成データが生成され、依存も下限指定から最新へ解決される
+（手元と版が変わりうるので、デプロイ前にはここまで通しておく）。
 
 ```bash
-docker build -t dashboard . && docker run -p 8080:8080 -e DASHBOARD_PASSWORD=test1234 dashboard
+docker build -t protofes-dashboard-test .
+```
+
+```bash
+docker run --rm -p 8600:8080 -e DASHBOARD_PASSWORD=test1234 protofes-dashboard-test
+```
+
+`http://localhost:8600` を開く。確認が済んだら消す。
+
+```bash
+docker rmi protofes-dashboard-test
+```
+
+> Docker Desktop の起動直後は `npipe:////./pipe/dockerDesktopLinuxEngine` が見つからず
+> ビルドに失敗する。Linux エンジンが上がりきるまで待ってから再実行する。
+
+### テスト
+
+実データにも Firestore にも接続しない（合成データのみ）。
+
+```bash
+python -m pytest
 ```
 
 ## 不具合が起きたときの連絡先を画面に出す
@@ -150,7 +216,7 @@ SUPPORT_CONTACT="開発担当（Slack: @akihide）" bash deploy/deploy.sh
 
 **もっと強い制御が要るなら**、Identity-Aware Proxy（IAP）＋ Google アカウントでの
 許可リストに切り替える。「誰が見たか」がログに残り、退職・離脱時の遮断も個別にできる。
-非エンジニアでも Google アカウントさえあれば使える。
+読み手がエンジニアに限られた今、この移行の障壁は下がっている。
 
 ## データ上の注意
 
