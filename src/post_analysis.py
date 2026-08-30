@@ -69,7 +69,7 @@ def fig1_ecdf(t: dict) -> None:
         st.write(f"中央値: 今年 **{out['this_year']['median']}** / 去年・金 **{ly['median']}**（去年 6.0 が基準）")
     fig.update_layout(xaxis_title="訪問ブース数", yaxis_title="累積割合", height=380,
                       legend=dict(orientation="h"))
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
 
 def fig2_within_diff(t: dict) -> None:
@@ -85,7 +85,7 @@ def fig2_within_diff(t: dict) -> None:
                   annotation_text=f"平均 {out['mean']:+.2f}")
     fig.update_layout(xaxis_title="その人の差 = DRSA枠の訪問率 − COVERAGE枠の訪問率",
                       yaxis_title="人数", height=380)
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
     st.write(f"対象参加者数 **{out['n_participants']}**（{out['comparison']}）")
     st.info(out["caveat"])
 
@@ -98,7 +98,7 @@ def fig3_funnel(t: dict) -> None:
     for stage in ["presented", "visited", "rated", "high"]:
         fig.add_bar(name=stage, x=f["interest_match"], y=f[stage])
     fig.update_layout(barmode="group", height=360, yaxis_title="件数")
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
     show = f.copy()
     for c in ["visit_yield", "rate_yield", "high_yield"]:
         # 分母0のとき _ratio は None を返す。列が全て None だと object dtype になり
@@ -117,7 +117,7 @@ def fig4_bands(t: dict) -> None:
     out["band"] = out["band"].astype(str)
     fig = go.Figure(go.Bar(x=out["band"], y=out["visit_rate"], text=out["n"]))
     fig.update_layout(height=320, xaxis_title="decision_table_size の帯", yaxis_title="推薦枠への訪問率")
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
 
 def fig5_rules(t: dict, rules: list[dict]) -> None:
@@ -135,7 +135,7 @@ def fig6_assigned(t: dict) -> None:
     fig.add_histogram(x=out["assigned"]["scores"], name=f"was_assigned=1 (n={out['assigned']['n']})", opacity=0.6)
     fig.add_histogram(x=out["unassigned"]["scores"], name=f"was_assigned=0 (n={out['unassigned']['n']})", opacity=0.6)
     fig.update_layout(barmode="overlay", height=320, xaxis_title="score")
-    st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
     st.write(f"サニティチェック（選ばれたものは実際に上位か）: "
              f"{'✅ OK' if out['sanity_ok'] else '⚠️ 要確認'}")
 

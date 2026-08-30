@@ -138,7 +138,7 @@ def render(source_dir: str, ops_url: str) -> None:
         fig.update_layout(yaxis2=dict(overlaying="y", side="right", title="決定表件数"),
                           height=380, margin=dict(t=20, b=20), legend=dict(orientation="h"),
                           xaxis_title="時刻（JST）")
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
 
     st.divider()
     st.markdown("### 異常検知")

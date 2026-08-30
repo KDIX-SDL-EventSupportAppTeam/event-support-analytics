@@ -5,5 +5,7 @@ numpy>=2.0
 pandas>=2.2.2
 matplotlib>=3.9
 plotly>=5.24
-streamlit>=1.40
+# st.plotly_chart(width="stretch") を使う。旧 use_container_width は
+# 2025-12-31 で廃止予定と告知されている（現在は警告のみ）
+streamlit>=1.49
 pytest>=8.0
