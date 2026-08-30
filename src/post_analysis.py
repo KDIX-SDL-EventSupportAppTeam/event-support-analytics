@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -23,11 +24,16 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import auth  # noqa: E402
+import page_setup  # noqa: E402
 import post_eval_metrics as pem  # noqa: E402
 import rec_db  # noqa: E402
 
-st.set_page_config(page_title="推薦の事後分析", layout="wide", page_icon="📈")
+page_setup.configure(page_title="推薦の事後分析", page_icon="📈")
 LAST_YEAR_TABLES = Path("data/tables")
+
+# 既定のデータ源。Cloud Run ではイメージに焼いた合成データを指す
+DEFAULT_SOURCE_DIR = os.environ.get("REC_DATA_DIR", "data/synth")
 
 
 @st.cache_data
@@ -158,8 +164,9 @@ def fig7_timeline(t: dict) -> None:
 
 
 def main() -> None:
+    auth.require_password()  # 合言葉が未設定のローカル実行では素通りする
     st.title("📈 推薦の事後分析")
-    source_dir = st.sidebar.text_input("ダンプディレクトリ", value="data/synth")
+    source_dir = st.sidebar.text_input("ダンプディレクトリ", value=DEFAULT_SOURCE_DIR)
     st.sidebar.caption("イベント後のダンプ1回ぶん（CSV/Parquet）＋ rules_built.jsonl。")
     try:
         t = load(source_dir)

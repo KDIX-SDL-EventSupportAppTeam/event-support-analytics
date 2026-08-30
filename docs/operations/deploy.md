@@ -1,19 +1,41 @@
 # ダッシュボードを共有する（Cloud Run へのデプロイ）
 
 同じ GCP プロジェクトに入っていない運営メンバーへ、
-[`src/dashboard.py`](../../src/dashboard.py) の画面を URL で共有するための手順。
+[`src/app.py`](../../src/app.py) の画面を URL で共有するための手順。
 
 **アクセス制御は「共有の合言葉」1つのみ**である。強度と限界は末尾に書く。
 
 ## 構成
 
+**1つの URL に3画面が入っている。** 左のメニューで行き来する。
+
 ```
 ブラウザ ──► Cloud Run（誰でも到達できる URL）
                └─ 合言葉の入力画面（src/auth.py）
-                    └─ 合言葉が一致 ─► ダッシュボード
+                    └─ 合言葉が一致 ─► 統合アプリ（src/app.py）
+                                         ├─ 📊 去年の行動データ   /last-year（既定）
+                                         ├─ 🚦 推薦の当日監視     /live
+                                         └─ 📈 推薦の事後分析     /post
              合言葉は Secret Manager から環境変数として注入
              データ（data/tables/*.csv）はイメージに焼き込み済み
+             推薦の2画面が読む合成データはイメージのビルド時に生成
 ```
+
+**合言葉は入口（`src/app.py`）で1回だけ確認する。** 認証を通るまでメニューを組み立てない
+ので、どの画面にも入れない。画面を追加したときに認証を付け忘れる事故を構造で防ぐため、
+個別画面ではなく入口で止めている。
+
+### 推薦の2画面について
+
+**本番 MySQL への接続経路が未確定**（[仕様 E-1](../specs/recommendation-evaluation/02-data-source.md) §4）
+のため、デプロイ版で動くのは**リハーサル用の合成データだけ**である。
+イメージのビルド時に `synth_rec_data.py` が固定シードで生成する。
+
+当日に実データを見るには、経路が決まったあと `rec_db.SqlSource` の実装が要る。
+それまでは「画面の作りと導線を運営に見てもらう」用途にとどまる。
+
+当日監視の画面は45秒ごとに自動更新される。**メニューで別の画面へ移ると更新は止まる。**
+当日はこの画面を開いたままにしておくこと。
 
 Firestore へは接続しない。コンテナが読むのは焼き込まれた CSV だけである
 （「Firestore へのアクセスは抽出時の一度きり」という AGENTS.md の規則を守るため）。
@@ -73,15 +95,28 @@ gcloud run services delete protofes-dashboard --region asia-northeast1 --project
 ## ローカルでの動作確認
 
 合言葉を設定しなければ、これまで通り認証なしで起動する。
+デプロイ版と同じ3画面を出すには統合アプリを起動する。
 
 ```bash
-streamlit run src/dashboard.py
+streamlit run src/app.py
+```
+
+推薦の2画面は合成データを読む。無ければ先に作る。
+
+```bash
+python src/synth_rec_data.py --out data/synth
 ```
 
 合言葉つきの画面を手元で確認したいとき:
 
 ```bash
-DASHBOARD_PASSWORD=test1234 streamlit run src/dashboard.py
+DASHBOARD_PASSWORD=test1234 streamlit run src/app.py
+```
+
+個別の画面だけを開きたいとき（開発用。`src/app.py` を通さなくても動く）:
+
+```bash
+streamlit run src/live_dashboard.py
 ```
 
 コンテナごと確認したいとき:

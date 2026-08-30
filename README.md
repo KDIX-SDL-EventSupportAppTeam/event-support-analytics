@@ -24,14 +24,25 @@ python src/dump_firestore.py
 # 2. 中間テーブル生成 → 指標算出 → 図表生成（以降はローカルファイルのみで完結）
 python src/run_pipeline.py
 
-# 3. GUIで絞り込みながら確認する
-streamlit run src/dashboard.py
+# 3. GUIで絞り込みながら確認する（3画面の統合アプリ）
+streamlit run src/app.py
 ```
 
 ### GUI ダッシュボード
 
-`streamlit run src/dashboard.py` でブラウザが開き、絞り込みながら結果を確認できる。
-運営メンバーへ URL で共有する手順（Cloud Run + 合言葉）は [docs/operations/deploy.md](docs/operations/deploy.md) を参照。
+`streamlit run src/app.py` でブラウザが開く。**左のメニューで3画面を行き来する。**
+
+| 画面 | 対象 | 内容 |
+|---|---|---|
+| 📊 去年の行動データ | 2025年 | 絞り込みながら分析結果を読む（既定） |
+| 🚦 推薦の当日監視 | 2026年 当日 | 信号機。壊れていないかを見る |
+| 📈 推薦の事後分析 | 2026年 事後 | 問い1つに図1つ |
+
+合言葉の確認は入口（`src/app.py`）で1回だけ行う。運営メンバーへ URL で共有する手順
+（Cloud Run + 合言葉）は [docs/operations/deploy.md](docs/operations/deploy.md) を参照。
+
+個別の画面だけを開くこともできる（開発用）:
+`streamlit run src/dashboard.py` / `src/live_dashboard.py` / `src/post_analysis.py`
 
 - **絞り込み**: 開催日（両日／金／土）、年代、性別、興味ジャンル、
   チェックイン0件・単発訪問者の包含/除外、運営・出展者の pid 除外
@@ -60,10 +71,11 @@ python src/build_tables.py data/raw/dump_YYYYMMDD_HHMMSS.json --show-staff-candi
 python src/synth_rec_data.py --out data/synth
 python src/synth_rec_data.py --out data/synth_dead --recommender-dead --no-ops-state
 
-# 当日の監視画面（信号機・30〜60秒で自動更新）
-streamlit run src/live_dashboard.py
+# 統合アプリから開く（左のメニューで「推薦の当日監視」「推薦の事後分析」へ）
+streamlit run src/app.py
 
-# 事後の分析画面（問い1つに図1つ）
+# 個別に開く場合（開発用）
+streamlit run src/live_dashboard.py
 streamlit run src/post_analysis.py
 ```
 

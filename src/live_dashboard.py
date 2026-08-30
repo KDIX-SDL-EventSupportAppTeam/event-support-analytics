@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -25,10 +26,15 @@ import streamlit as st
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import auth  # noqa: E402
 import live_metrics as lm  # noqa: E402
+import page_setup  # noqa: E402
 import rec_db  # noqa: E402
 
-st.set_page_config(page_title="推薦の当日監視", layout="wide", page_icon="🚦")
+page_setup.configure(page_title="推薦の当日監視", page_icon="🚦")
+
+# 既定のデータ源。Cloud Run ではイメージに焼いた合成データを指す
+DEFAULT_SOURCE_DIR = os.environ.get("REC_DATA_DIR", "data/synth")
 
 _LEVEL_COLOR = {lm.GREEN: "#16a34a", lm.YELLOW: "#d97706", lm.RED: "#dc2626", lm.UNKNOWN: "#64748b"}
 _LEVEL_MARK = {lm.GREEN: "🟢", lm.YELLOW: "🟡", lm.RED: "🔴", lm.UNKNOWN: "⚪"}
@@ -169,9 +175,10 @@ def render(source_dir: str, ops_url: str) -> None:
 
 
 def main() -> None:
+    auth.require_password()  # 合言葉が未設定のローカル実行では素通りする
     st.title("🚦 推薦の当日監視")
     st.sidebar.header("データ源")
-    source_dir = st.sidebar.text_input("ダンプ/合成ディレクトリ", value="data/synth")
+    source_dir = st.sidebar.text_input("ダンプ/合成ディレクトリ", value=DEFAULT_SOURCE_DIR)
     ops_url = st.sidebar.text_input("推薦エンジン base URL（/ops/state）", value="",
                                     help="空なら <ディレクトリ>/ops_state.json を読む。取れなくても他は動く")
     st.sidebar.caption("本番 MySQL への接続経路は未確定（E-1）。既定は合成データ。")
