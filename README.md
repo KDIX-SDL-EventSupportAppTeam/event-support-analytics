@@ -9,7 +9,8 @@
 |---|---|
 | [docs/FINDINGS.md](docs/FINDINGS.md) | **分析結果サマリ**。5つの問いへの回答と全指標の実測値 |
 | [docs/PURPOSE.md](docs/PURPOSE.md) | **このリポジトリの存在意義**。最初に読む |
-| [docs/specs/analytics-pipeline/](docs/specs/analytics-pipeline/) | 仕様書（意味単位で分割） |
+| [docs/specs/analytics-pipeline/](docs/specs/analytics-pipeline/) | 去年（2025年）データの分析の仕様 |
+| [docs/specs/recommendation-evaluation/](docs/specs/recommendation-evaluation/) | 今年（2026年）の推薦の当日監視・事後分析の仕様 |
 | [AGENTS.md](AGENTS.md) | 作業指針・絶対規則 |
 
 ## 使い方
@@ -49,6 +50,30 @@ streamlit run src/dashboard.py
 python src/build_tables.py data/raw/dump_YYYYMMDD_HHMMSS.json --show-staff-candidates
 ```
 
+### 今年（2026年）の推薦の評価
+
+仕様は [docs/specs/recommendation-evaluation/](docs/specs/recommendation-evaluation/)。
+本番 MySQL への接続経路が未確定のため（仕様 E-1）、既定は合成データで動かす。
+
+```bash
+# 合成データを生成（リハーサル用）
+python src/synth_rec_data.py --out data/synth
+python src/synth_rec_data.py --out data/synth_dead --recommender-dead --no-ops-state
+
+# 当日の監視画面（信号機・30〜60秒で自動更新）
+streamlit run src/live_dashboard.py
+
+# 事後の分析画面（問い1つに図1つ）
+streamlit run src/post_analysis.py
+```
+
+- 算出式は `src/live_metrics.py` / `src/post_eval_metrics.py` にだけ書く（二重管理しない）
+- 当日画面は **A/B の効果（群別訪問率・その差）を表示しない**（仕様 03 §5）
+- `interest_match` は凍結値を使い再計算しない（仕様 04 §4）
+- 条件属性の定義は `event-support-recommend/features/` を import する。コピーしない
+  （`REC_FEATURES_PATH` にそのリポジトリのルートを渡す。`src/rec_features.py`）
+- MySQL 直結（`src/rec_db.py` の `SqlSource`）は接続経路が決まってから実装する
+
 テスト（合成データのみを使用。実データやFirestore接続は不要）:
 
 ```bash
@@ -57,17 +82,22 @@ python -m pytest tests/
 
 ## 現在の状態
 
-抽出（`dump_firestore.py`）・中間テーブル生成（`build_tables.py`）・
+**去年データの分析**: 抽出（`dump_firestore.py`）・中間テーブル生成（`build_tables.py`）・
 指標算出（`metrics.py`）・可視化（`visualize.py`）を実装済み。
-
 まだ Firestore からの実データ抽出は行っていない
 （GCP接続はローカル環境からの一度限りの実行を想定しているため）。
+
+**今年の推薦の評価**: 指標（`live_metrics.py` / `post_eval_metrics.py`）・
+画面（`live_dashboard.py` / `post_analysis.py`）・合成データ生成（`synth_rec_data.py`）を実装済み。
+本番 MySQL への接続（`rec_db.SqlSource`）は接続経路の決定待ち（仕様 E-1）。
+現状は合成データでのリハーサルまで通せる。
 
 ## 関連リポジトリ
 
 | リポジトリ | 関係 |
 |---|---|
-| `KDIX-SDL-EventSupportAppTeam/event-support-server` | 今年のバックエンド |
+| `KDIX-SDL-EventSupportAppTeam/event-support-server` | 今年のバックエンド。MySQL スキーマの正本 |
+| `KDIX-SDL-EventSupportAppTeam/event-support-recommend` | 今年の推薦エンジン。`features/` を import して使う・`/ops/state` の提供元 |
 | `KDIX-SDL-EventSupportAppTeam/event-support-frontend` | 今年のフロントエンド |
 | `HidetsuguSuto/2025_P3_supporters_game` | 去年のアプリ（**読み取り専用**） |
 
