@@ -35,16 +35,33 @@ import auth  # noqa: E402
 import dashboard  # noqa: E402
 import live_dashboard  # noqa: E402
 import post_analysis  # noqa: E402
+import report  # noqa: E402
+
+
+def _guarded(screen):
+    """画面の main を `report.guarded` で包んだ関数にする。
+
+    単体起動では各ファイルの `__main__` が `report.guarded(main)` を呼ぶが、
+    統合アプリでは `st.Page` が main を直接呼ぶため、ここで包まないと
+    想定外の例外がレポート画面にならず Streamlit の生の例外が出てしまう。
+    """
+    def run() -> None:
+        report.guarded(screen)
+
+    run.__name__ = screen.__module__.replace(".", "_")
+    return run
 
 
 def main() -> None:
     auth.require_password()  # 合言葉が未設定のローカル実行では素通りする
 
     pages = [
-        st.Page(dashboard.main, title="去年の行動データ", icon="📊",
+        st.Page(_guarded(dashboard.main), title="去年の行動データ", icon="📊",
                 url_path="last-year", default=True),
-        st.Page(live_dashboard.main, title="推薦の当日監視", icon="🚦", url_path="live"),
-        st.Page(post_analysis.main, title="推薦の事後分析", icon="📈", url_path="post"),
+        st.Page(_guarded(live_dashboard.main), title="推薦の当日監視", icon="🚦",
+                url_path="live"),
+        st.Page(_guarded(post_analysis.main), title="推薦の事後分析", icon="📈",
+                url_path="post"),
     ]
     st.sidebar.markdown("### 画面")
     st.navigation(pages, position="sidebar").run()

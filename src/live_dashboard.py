@@ -30,6 +30,7 @@ import auth  # noqa: E402
 import live_metrics as lm  # noqa: E402
 import page_setup  # noqa: E402
 import rec_db  # noqa: E402
+import report  # noqa: E402
 
 page_setup.configure(page_title="推薦の当日監視", page_icon="🚦")
 
@@ -186,4 +187,4 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    report.guarded(main)  # 統合アプリ経由では src/app.py が同じ役割を担う

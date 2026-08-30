@@ -66,6 +66,23 @@ def test_missing_password_in_container_stops_every_screen(synth_dir, monkeypatch
     assert at.title.len == 0
 
 
+def test_app_turns_unexpected_errors_into_a_report_screen(synth_dir, monkeypatch):
+    """統合アプリ経由でも report.guarded が効く（st.Page は main を直接呼ぶため）。"""
+    import dashboard
+
+    def boom() -> None:
+        raise RuntimeError("わざと壊す")
+
+    monkeypatch.setattr(dashboard, "main", boom)
+    at = AppTest.from_file(APP, default_timeout=90)
+    at.run()
+    assert not at.exception  # 生の例外ではなくレポート画面になる
+    body = " ".join(m.value for m in at.markdown)
+    assert "あなたの操作が原因ではない" in body
+    # レポート本文（送ってもらう内容）に例外の型が入っている
+    assert any("RuntimeError" in c.value for c in at.code)
+
+
 @pytest.mark.parametrize("page", ["live_dashboard", "post_analysis"])
 def test_rec_screens_require_password_standalone(synth_dir, monkeypatch, page):
     """単体起動でも合言葉の外に出ていないこと（統合前は無防備だった）。"""
