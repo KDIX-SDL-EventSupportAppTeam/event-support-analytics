@@ -282,7 +282,7 @@
 
 ```bash
 python src/run_pipeline.py          # data/raw/ の最新ダンプから再生成
-streamlit run src/dashboard.py      # 絞り込みながら確認
+streamlit run src/app.py            # 「📊 去年の行動データ」で絞り込みながら確認
 ```
 
 **`--exclude-pids` に根拠のない pid を渡さないこと。**

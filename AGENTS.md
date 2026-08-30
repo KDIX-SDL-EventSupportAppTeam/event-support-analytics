@@ -13,6 +13,9 @@
 | 守ること | [docs/rules/](docs/rules/README.md) — Git・データの扱い・ドキュメント |
 | 動かし方 | [README.md](README.md) · [docs/operations/](docs/operations/README.md) |
 
+画面は `streamlit run src/app.py` で3つまとめて起動する（去年の行動データ／推薦の当日監視／
+推薦の事後分析）。**読み手はエンジニアである**（2026-08-31 に運営メンバーから切り替わった）。
+
 着手前に最低限この3つを読む。
 
 1. [背景](docs/specs/analytics-pipeline/01-context/background.md) — 去年と今年の差分

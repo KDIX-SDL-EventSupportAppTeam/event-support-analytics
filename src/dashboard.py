@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import auth  # noqa: E402
 import metrics  # noqa: E402
+import page_setup  # noqa: E402
 import report  # noqa: E402
 
 TABLES_DIR = Path("data/tables")
@@ -36,7 +37,7 @@ MIN_CELL_SIZE = 3  # 該当者がこれ未満の絞り込みは集計を表示�
 
 PLOTLY_CONFIG = {"displayModeBar": False, "scrollZoom": False}
 
-st.set_page_config(page_title="プロトフェス行動データ", layout="wide", page_icon="📊")
+page_setup.configure(page_title="プロトフェス行動データ", page_icon="📊")
 
 
 # --- 見た目 -------------------------------------------------------------------
