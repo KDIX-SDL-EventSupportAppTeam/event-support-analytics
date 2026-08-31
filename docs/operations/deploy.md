@@ -39,6 +39,13 @@
 （[02 §4](../specs/recommendation-evaluation/02-data-source.md)）。
 **書き込み可能な `SAKURA_PROXY_*` は渡さない。**
 
+`/ops/state` と `/demo`（推薦側のパラメータ調整シミュレータ）を使うには、
+推薦サービスの base URL を `RECOMMEND_BASE_URL` に、認証トークンを `RECOMMEND_OPS_TOKEN` に
+設定する。`RECOMMEND_OPS_TOKEN` は推薦サービスの `OPS_TOKEN` と**同一の秘密**なので、
+Secret Manager の同じシークレット（`RECOMMEND_OPS_TOKEN`）をこの Cloud Run にも
+`--set-secrets` で渡す（推薦側 ADR 0008。ヘッダは `X-Ops-Token`）。
+**未設定でも監視は動く。** その場合 `/ops/state` 欄は「認証エラー」と表示される。
+
 当日監視の画面は45秒ごとに自動更新される。**メニューで別の画面へ移ると更新は止まる。**
 当日はこの画面を開いたままにしておくこと。
 
