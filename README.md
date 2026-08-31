@@ -68,7 +68,8 @@ python src/build_tables.py data/raw/dump_YYYYMMDD_HHMMSS.json --show-staff-candi
 ### 今年（2026年）の推薦の評価
 
 仕様は [docs/specs/recommendation-evaluation/](docs/specs/recommendation-evaluation/)。
-本番 MySQL への接続経路が未確定のため（仕様 E-1）、既定は合成データで動かす。
+本番 MySQL は**さくらプロキシの読み取り専用の口**から読む（[ADR 0001](docs/decisions/adrs/0001-今年のデータ取得はプロキシの読み取り専用の口を使う.md)）。
+口はまだ用意されていないため、既定は合成データで動かす。
 
 ```bash
 # 合成データを生成（リハーサル用）
@@ -88,7 +89,8 @@ streamlit run src/post_analysis.py
 - `interest_match` は凍結値を使い再計算しない（仕様 04 §4）
 - 条件属性の定義は `event-support-recommend/features/` を import する。コピーしない
   （`REC_FEATURES_PATH` にそのリポジトリのルートを渡す。`src/rec_features.py`）
-- MySQL 直結（`src/rec_db.py` の `SqlSource`）は接続経路が決まってから実装する
+- 本番接続は `src/rec_db.py` の `SqlSource`。`REC_READONLY_PROXY_URL` / `REC_READONLY_PROXY_KEY` を
+  設定すると本番を読む（**書き込み可能な `SAKURA_PROXY_*` は使わない**）。MySQL 直結は不可能
 
 テスト（合成データのみを使用。実データやFirestore接続は不要）:
 
@@ -105,8 +107,9 @@ python -m pytest tests/
 
 **今年の推薦の評価**: 指標（`live_metrics.py` / `post_eval_metrics.py`）・
 画面（`live_dashboard.py` / `post_analysis.py`）・合成データ生成（`synth_rec_data.py`）を実装済み。
-本番 MySQL への接続（`rec_db.SqlSource`）は接続経路の決定待ち（仕様 E-1）。
-現状は合成データでのリハーサルまで通せる。
+本番 MySQL への接続（`rec_db.SqlSource`）も実装済みで、**読み取り専用の口が用意されれば
+環境変数2つを設定するだけで動く**（[ADR 0001](docs/decisions/adrs/0001-今年のデータ取得はプロキシの読み取り専用の口を使う.md)）。
+ただし**実データはまだ1件も通っていない**。現状は合成データでのリハーサルまで通せる。
 
 ## 関連リポジトリ
 
