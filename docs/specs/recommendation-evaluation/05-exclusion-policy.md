@@ -30,9 +30,14 @@
 
 ## 2. server 側との一致
 
-server の集計クエリは `users` を JOIN して `u.role = 'participant'` で絞っている
-（`src/routes/v1/admin/dashboard.ts`、`src/routes/v1/admin/analytics.ts`、
-`src/lib/bingo/fallback.ts` ほか。フォールバック抽選の除外は server 内で E12 と呼ばれる）。
+server は2つのやり方で同じことをしている。**どちらも残るのは `participant` だけ**である。
+
+| server の場所 | 絞り方 |
+|---|---|
+| `src/routes/v1/admin/dashboard.ts`、`src/lib/bingo/fallback.ts`、`assignOuterCells.ts`、`ensureCard.ts`、`pickPreSurveyBooth.ts` | **SQL で** `users` を JOIN し `u.role = 'participant'` |
+| `src/routes/v1/admin/analytics.ts` | SQL は `u.event_id = ?` のみ。**取得後に JS で** `role === 'participant'` に絞ってから集計する |
+
+（フォールバック抽選の除外は server 内で E12 と呼ばれる。）
 **analytics も同じ「`participant` だけを残す」に揃える。**
 
 `rec_db.participants_only()` は実装上は `role != 'participant'` を**引く**書き方だが、
@@ -57,8 +62,14 @@ server は INNER JOIN なので該当行は落ちる。**事後分析はダン�
 
 `rec_db.scope_to_event()` は `users` テーブルを `event_id` で絞らない
 （同関数の docstring と `tests/test_rec_db.py::test_sql_source_works_through_load_tables` を参照）。
-`card_unlock_events` / `recommendation_scores` は `event_id` 列を持たないため、
-`bingo_cards` 経由で解決した `event_id` で絞る。
+`card_unlock_events` / `bingo_cells` は `event_id` 列を持たないため、
+`bingo_cards` 経由で解決した `event_id` で絞る（`CARD_KEYED_TABLES`）。
+
+> **`recommendation_scores` はイベントで絞られない。**
+> `event_id` 列も `card_id` 列も持たず（持つのは `unlock_event_id`）、
+> `CARD_KEYED_TABLES` にも入っていないため、`scope_to_event()` を素通りする。
+> role による除外は `user_id` があるので効く。
+> **DB に複数イベントが同居すると他イベントの行が混ざる。**
 
 ---
 
