@@ -95,7 +95,77 @@ def test_scope_to_event_uses_card_derived_event_id(raw):
     """イベント絞り込みが card 由来の event_id で効くこと（users.event_id では絞らない）。"""
     out = rec_db.load_tables(_InMemory(raw), event_id=synth.EVENT_ID)
     assert len(out["card_unlock_events"]) > 0
-    assert len(rec_db.load_tables(_InMemory(raw), event_id="other-event")["card_unlock_events"]) == 0
+    assert len(out["recommendation_scores"]) > 0
+    other = rec_db.load_tables(_InMemory(raw), event_id="other-event")
+    assert len(other["card_unlock_events"]) == 0
+    # recommendation_scores は event_id / card_id 列を持たないが、
+    # unlock_event_id → card_unlock_events → bingo_cards で解決して絞る（issue #14）。
+    assert len(other["recommendation_scores"]) == 0
+
+
+def _two_event_tables():
+    """2イベントが同居する最小の入力。scores は event_id / card_id 列を持たない。"""
+    users = pd.DataFrame({"id": ["uA", "uB"], "role": ["participant", "participant"]})
+    cards = pd.DataFrame({
+        "id": ["card-A", "card-B"],
+        "event_id": ["evt-A", "evt-B"],
+        "user_id": ["uA", "uB"],
+    })
+    unlocks = pd.DataFrame({
+        "id": ["unlock-A", "unlock-B"],
+        "card_id": ["card-A", "card-B"],
+        "phase": ["COVERAGE", "COVERAGE"],
+        "strategy": ["RECOMMEND", "RECOMMEND"],
+        "decision_table_size": [24, 24],
+        "global_checkin_count": [1, 1],
+        "created_at": ["2026-10-16T00:00:00Z", "2026-10-16T00:00:00Z"],
+    })
+    scores = pd.DataFrame({
+        "id": ["score-A", "score-B"],
+        "unlock_event_id": ["unlock-A", "unlock-B"],
+        "user_id": ["uA", "uB"],
+        "booth_id": ["b00", "b00"],
+        "was_assigned": [1, 1],
+        "score": [0.5, 0.5],
+        "rank_in_event": [1, 1],
+        "interest_match": ["MATCH", "MATCH"],
+        "attributes": ["{}", "{}"],
+        "reason_payload": ["{}", "{}"],
+        "created_at": ["2026-10-16T00:00:00Z", "2026-10-16T00:00:00Z"],
+    })
+    return {
+        "users": users, "bingo_cards": cards,
+        "card_unlock_events": unlocks, "recommendation_scores": scores,
+    }
+
+
+def test_scope_to_event_filters_recommendation_scores_across_events():
+    """複数イベント同居時、絞った側の scores に他イベントの行が混ざらない（issue #14）。"""
+    src = _InMemory(_two_event_tables())
+
+    scoped = rec_db.load_tables(src, ("recommendation_scores",), event_id="evt-A")
+    assert list(scoped["recommendation_scores"]["id"]) == ["score-A"]
+    # user_id は割れず1列のまま（attach_card_owner を流用していないこと）。
+    assert "user_id_x" not in scoped["recommendation_scores"].columns
+    assert list(scoped["recommendation_scores"]["user_id"]) == ["uA"]
+
+    # event_id=None（絞り込みなし）の振る舞いは変えない。
+    unscoped = rec_db.load_tables(src, ("recommendation_scores",))
+    assert set(unscoped["recommendation_scores"]["id"]) == {"score-A", "score-B"}
+
+
+def test_attach_scores_event_id_survives_empty_and_missing_columns():
+    """空 DataFrame・列欠けで落ちないこと（取得層の例外は当日描画を丸ごと落とす）。"""
+    cols = list(rec_db.LIVE_TABLES["recommendation_scores"])
+    empty = pd.DataFrame(columns=cols)
+    cards = pd.DataFrame({"id": ["card-A"], "event_id": ["evt-A"]})
+    unlocks = pd.DataFrame({"id": ["unlock-A"], "card_id": ["card-A"]})
+
+    assert rec_db.attach_scores_event_id(empty, unlocks, cards).empty
+
+    scores = pd.DataFrame({"id": ["s1"], "unlock_event_id": ["unlock-A"], "user_id": ["uA"]})
+    out = rec_db.attach_scores_event_id(scores, pd.DataFrame(), cards)
+    assert "event_id" not in out.columns  # unlocks 列欠け → 何もしない
 
 
 def test_unlock_events_join_to_scores_by_unlock_event_id(raw):
