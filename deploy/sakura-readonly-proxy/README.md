@@ -2,8 +2,19 @@
 
 **先生へのお願いは、この1ページで完結します。作業は3つ、5分ほどです。**
 
-分析側（`event-support-analytics` / `event-support-recommend`）が本番 DB を**読む**ための口です。
-既存の `/bingo/query/index.php` とは別物で、**SELECT しか通りません**。
+分析側（`event-support-analytics`）と**推薦エンジン（`event-support-recommend`）**が
+本番 DB を**読む**ための口です。既存の `/bingo/query/index.php` とは別物で、**SELECT しか通りません**。
+
+**この口は2つのサービスが使います。鍵は1本で構いません**（利用者が2つになるだけです）。
+
+| 使う人 | 何のために | いつ読むか |
+|---|---|---|
+| `event-support-analytics` | 当日の監視画面・事後分析 | 当日45秒ごと |
+| `event-support-recommend` | **推薦の決定表づくり**（当日フェーズを上げるのに必須） | 当日5分ごと |
+
+推薦エンジンがこの口を使う理由は
+`event-support-recommend/docs/decisions/adrs/0002-決定表のデータ入手経路.md` にあります。
+**この口が無いと、当日の推薦は最も単純な戦略のまま固定されます。**
 
 なぜ別に作るか: 既存の口の鍵は全権で、分析側から `UPDATE` や `DROP` が通ってしまいます。
 分析に必要なのは読むことだけなので、権限の側で落としておきたい、という理由です。
