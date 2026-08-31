@@ -65,11 +65,13 @@ server は INNER JOIN なので該当行は落ちる。**事後分析はダン�
 `card_unlock_events` / `bingo_cells` は `event_id` 列を持たないため、
 `bingo_cards` 経由で解決した `event_id` で絞る（`CARD_KEYED_TABLES`）。
 
-> **`recommendation_scores` はイベントで絞られない。**
-> `event_id` 列も `card_id` 列も持たず（持つのは `unlock_event_id`）、
-> `CARD_KEYED_TABLES` にも入っていないため、`scope_to_event()` を素通りする。
-> role による除外は `user_id` があるので効く。
-> **DB に複数イベントが同居すると他イベントの行が混ざる。**
+`recommendation_scores` は `event_id` 列も `card_id` 列も持たない（持つのは
+`unlock_event_id`）ため、`unlock_event_id` → `card_unlock_events.id` → `card_id`
+→ `bingo_cards.event_id` で `event_id` を解決してから絞る
+（`rec_db.attach_scores_event_id()`。`load_tables()` は `recommendation_scores` を
+要求されると `names` に無くても `card_unlock_events` / `bingo_cards` を取得する）。
+`user_id` は割らないため `event_id` だけをマージする（`attach_card_owner()` は流用しない）。
+role による除外は `user_id` があるので従来どおり効く。
 
 ---
 
