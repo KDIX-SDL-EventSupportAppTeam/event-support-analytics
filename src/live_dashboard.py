@@ -7,10 +7,13 @@
 
 - **事後用の重い集計と混ぜない**（別ファイル src/post_analysis.py）。混ぜると更新が止まる
 - 30〜60秒で自動更新。ピーク時でもこれで十分（解放は約9.3件/分）
-- データ源は DB（ここでは DumpSource / SynthSource）。`/ops/state` は取れなくても止めない
+- データ源は DB。`REC_SOURCE=sql` で本番（読み取り専用プロキシ）、既定は合成データ。
+  `/ops/state` は取れなくても止めない
 - **A/B の効果（群別訪問率・その差）を表示しない**（03 §5）。実験の進捗は提示数だけ
 
-接続経路が未確定のため（E-1）、既定は合成データ（`python src/synth_rec_data.py` で生成）。
+取得口は環境変数で選ぶ（02 §4）。**既定は合成データ**（`python src/synth_rec_data.py` で生成）。
+本番を読むときだけ `REC_SOURCE=sql` にし、`REC_READONLY_PROXY_URL` / `REC_READONLY_PROXY_KEY` /
+`REC_EVENT_ID` を渡す。**口が無い状態で既定を本番にすると画面が落ちるので、既定は変えない。**
 """
 
 from __future__ import annotations
@@ -37,10 +40,32 @@ page_setup.configure(page_title="推薦の当日監視", page_icon="🚦")
 # 既定のデータ源。Cloud Run ではイメージに焼いた合成データを指す
 DEFAULT_SOURCE_DIR = os.environ.get("REC_DATA_DIR", "data/synth")
 
+# 取得口の選択。**既定は合成データ**（口が無い状態で画面が落ちないため）。
+# 本番を読むときだけ REC_SOURCE=sql にする。接続情報は SqlSource が
+# REC_READONLY_PROXY_URL / REC_READONLY_PROXY_KEY から読む（02 §4）。
+SOURCE_KIND = os.environ.get("REC_SOURCE", "synth")
+
+# 本番は過去のイベントも同じ DB に居る。**当日のイベントに絞らないと混ざる。**
+# 絞り込み規則そのものは rec_db.scope_to_event にだけ書く（ADR 0001）。
+EVENT_ID = os.environ.get("REC_EVENT_ID") or None
+
 _LEVEL_COLOR = {lm.GREEN: "#16a34a", lm.YELLOW: "#d97706", lm.RED: "#dc2626", lm.UNKNOWN: "#64748b"}
 _LEVEL_MARK = {lm.GREEN: "🟢", lm.YELLOW: "🟡", lm.RED: "🔴", lm.UNKNOWN: "⚪"}
 REFRESH_SEC = 45
 JST = "Asia/Tokyo"
+
+
+_SOURCE_HELP = {
+    False: "合成データを表示中（REC_SOURCE=sql で本番の読み取り専用の口に切り替わる）。",
+    True: "**本番 MySQL**（読み取り専用プロキシ）を表示中。合成データではない。",
+}
+
+
+def source_label(source_kind: str, source_dir: str) -> str:
+    """**画面に「今どちらを見ているか」を必ず出す。** 取り違えると監視が意味を失う。"""
+    if source_kind == "sql":
+        return "本番 MySQL（読み取り専用プロキシ）" + (f" / event={EVENT_ID}" if EVENT_ID else "")
+    return f"合成（{source_dir}）"
 
 
 def to_jst(ts):
@@ -56,12 +81,28 @@ def to_jst(ts):
     return ts.tz_convert(JST)
 
 
+def make_source(source_kind: str, source_dir: str) -> rec_db.Source:
+    """取得口を1箇所で選ぶ。**画面の他の場所は取得口を知らない。**
+
+    `SqlSource` は接続情報が無ければここで RuntimeError を投げる。
+    その扱いは render() 側（1回の失敗で画面を殺さない）に任せる。
+    """
+    if source_kind == "sql":
+        return rec_db.SqlSource()
+    return rec_db.SynthSource(source_dir)
+
+
 @st.cache_data(ttl=REFRESH_SEC)
-def load_tables(source_dir: str) -> dict[str, pd.DataFrame]:
-    """取得の作法（card_id の解決・イベント絞り込み・スタッフ除外）は rec_db に集約する。"""
+def load_tables(source_kind: str, source_dir: str) -> dict[str, pd.DataFrame]:
+    """取得の作法（card_id の解決・イベント絞り込み・スタッフ除外）は rec_db に集約する。
+
+    **引数は文字列だけにする。** Source を引数にすると st.cache_data が
+    ハッシュできない。取得口はこの中で組み立てる。
+    """
     return rec_db.load_tables(
-        rec_db.SynthSource(source_dir),
+        make_source(source_kind, source_dir),
         ("card_unlock_events", "check_ins", "booth_ratings", "recommendation_scores", "bingo_cells"),
+        event_id=EVENT_ID,
     )
 
 
@@ -101,10 +142,10 @@ def signal_card(sig: lm.Signal) -> None:
 
 
 @st.fragment(run_every=REFRESH_SEC)
-def render(source_dir: str, ops_url: str) -> None:
+def render(source_kind: str, source_dir: str, ops_url: str) -> None:
     now = pd.Timestamp.now("UTC")
     try:
-        t = load_tables(source_dir)
+        t = load_tables(source_kind, source_dir)
     except FileNotFoundError as exc:
         st.error(f"{exc}\n\n`python src/synth_rec_data.py --out {source_dir}` で合成データを作れます。")
         return
@@ -116,7 +157,7 @@ def render(source_dir: str, ops_url: str) -> None:
     ops = load_ops_state(source_dir, ops_url)
 
     st.caption(f"最終更新 {to_jst(now):%H:%M:%S} JST　/　{REFRESH_SEC}秒ごとに自動更新"
-               f"　/　データ源: 合成（{source_dir}）")
+               f"　/　データ源: {source_label(source_kind, source_dir)}")
 
     board = lm.signal_board(t["card_unlock_events"], t["check_ins"], t["booth_ratings"], ops, now)
     worst = lm.worst_level(board)
@@ -180,11 +221,12 @@ def main() -> None:
     auth.require_password()  # 合言葉が未設定のローカル実行では素通りする
     st.title("🚦 推薦の当日監視")
     st.sidebar.header("データ源")
-    source_dir = st.sidebar.text_input("ダンプ/合成ディレクトリ", value=DEFAULT_SOURCE_DIR)
+    source_dir = st.sidebar.text_input("ダンプ/合成ディレクトリ", value=DEFAULT_SOURCE_DIR,
+                                       disabled=SOURCE_KIND == "sql")
     ops_url = st.sidebar.text_input("推薦エンジン base URL（/ops/state）", value="",
                                     help="空なら <ディレクトリ>/ops_state.json を読む。取れなくても他は動く")
-    st.sidebar.caption("本番 MySQL への接続経路は未確定（E-1）。既定は合成データ。")
-    render(source_dir, ops_url)
+    st.sidebar.caption(_SOURCE_HELP[SOURCE_KIND == "sql"])
+    render(SOURCE_KIND, source_dir, ops_url)
 
 
 if __name__ == "__main__":
