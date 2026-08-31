@@ -101,6 +101,15 @@ POST <base_url>
   →  200: { "rows": [...], "affectedRows": n, "insertId": n|null }
 ```
 
+### 口の設置
+
+口の PHP・権限の SQL・検証一式は [`deploy/sakura-readonly-proxy/`](../../../deploy/sakura-readonly-proxy/)
+にある。**Docker で MySQL と PHP を立てて通しきってあるので、先生に渡すのは完成品である。**
+
+```bash
+python deploy/sakura-readonly-proxy/verify/verify.py   # 本番には触らない
+```
+
 ### 環境変数
 
 | 変数 | 意味 |

@@ -17,3 +17,6 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+
+# 読み取り専用プロキシの設定（鍵を含む）
+deploy/sakura-readonly-proxy/config.php
