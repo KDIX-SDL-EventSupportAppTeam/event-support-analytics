@@ -39,7 +39,7 @@
 | `booth_ratings` | `checkin_id`, `rating`, `scale`, `rated_at` | **評価回収率** |
 | `recommendation_scores` | `booth_id`, `was_assigned`, `attributes` | **割当の集中度**（人気順への退化の検出） |
 | `bingo_cells` | `booth_id`, `is_revealed`, `is_achieved`, `source` | 空マス・自己修復の検知 |
-| `users` | `id`, `role` | **`role <> 'participant'` を全集計から除外** |
+| `users` | `id`, `role` | **`role = 'participant'` だけを残す**（規則は [05](05-exclusion-policy.md)） |
 
 ### 事後の分析に追加で使うもの
 
