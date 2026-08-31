@@ -264,12 +264,40 @@ def attach_card_owner(df: pd.DataFrame, cards: pd.DataFrame, *, card_col: str = 
     return df.merge(lookup, on=card_col, how="left")
 
 
+def attach_scores_event_id(
+    df: pd.DataFrame, unlocks: pd.DataFrame, cards: pd.DataFrame,
+    *, key_col: str = "unlock_event_id",
+) -> pd.DataFrame:
+    """`recommendation_scores` に **`event_id` だけ**を付ける。
+
+    解決経路: `unlock_event_id` → `card_unlock_events.id` → `card_id`
+    → `bingo_cards.event_id`。
+
+    `attach_card_owner()` を流用しない: あれは `user_id` もマージするが、
+    `recommendation_scores` は**すでに `user_id` を持つ**ため素直に merge すると
+    `user_id_x` / `user_id_y` に割れて後続の `participants_only()` が壊れる。
+
+    空 DataFrame・列欠けでは何もせず返す（当日監視の描画を落とさない。02 §4）。
+    """
+    if df.empty or key_col not in df.columns:
+        return df
+    if not {"id", "card_id"} <= set(unlocks.columns):
+        return df
+    if not {"id", "event_id"} <= set(cards.columns):
+        return df
+    card_of_unlock = unlocks[["id", "card_id"]].rename(columns={"id": key_col})
+    event_of_card = cards[["id", "event_id"]].rename(columns={"id": "card_id"})
+    resolved = card_of_unlock.merge(event_of_card, on="card_id", how="left")[[key_col, "event_id"]]
+    return df.merge(resolved, on=key_col, how="left")
+
+
 def scope_to_event(tables: dict[str, pd.DataFrame], event_id: str | None) -> dict[str, pd.DataFrame]:
     """1イベントぶんに絞る。**絞り込み規則はここだけに書く**（ADR 0001）。
 
     `recommendation_scores` / `card_unlock_events` に `event_id` 列は無いため、
-    `card_unlock_events` → `bingo_cards` の JOIN（`attach_card_owner`）で得た
-    `event_id` を使う。
+    `card_unlock_events` → `bingo_cards` の JOIN で得た `event_id` を使う
+    （`card_unlock_events` は `attach_card_owner()`、`recommendation_scores` は
+    `attach_scores_event_id()`。どちらも `load_tables()` が適用済みで渡す）。
 
     **`users.event_id` では絞らない。** 出展者・運営アカウントが混ざるため
     （event-support-server `docs/reference/api-endpoints.md`）。
@@ -311,7 +339,14 @@ def load_tables(source: Source, names: tuple[str, ...] | None = None, *,
     画面側はこれを呼ぶだけでよい。取得口（ダンプ／合成／プロキシ）は問わない。
     """
     names = names or tuple(LIVE_TABLES)
-    need = set(names) | ({"bingo_cards"} if set(names) & set(CARD_KEYED_TABLES) else set())
+    want = set(names)
+    need = set(want)
+    if want & set(CARD_KEYED_TABLES):
+        need |= {"bingo_cards"}
+    if "recommendation_scores" in want:
+        # scores は card_id を持たない。unlock_event_id → card_unlock_events →
+        # bingo_cards で event_id を解決するため、names に無くても両方を取る。
+        need |= {"card_unlock_events", "bingo_cards"}
     need |= {"users"} if exclude_staff else set()
 
     tables = {n: source.table(n) for n in need}
@@ -321,6 +356,9 @@ def load_tables(source: Source, names: tuple[str, ...] | None = None, *,
         for name in CARD_KEYED_TABLES:
             if name in tables:
                 tables[name] = attach_card_owner(tables[name], cards)
+        if "recommendation_scores" in tables and "card_unlock_events" in tables:
+            tables["recommendation_scores"] = attach_scores_event_id(
+                tables["recommendation_scores"], tables["card_unlock_events"], cards)
 
     tables = scope_to_event(tables, event_id)
 
