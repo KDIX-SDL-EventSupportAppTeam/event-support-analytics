@@ -20,6 +20,15 @@ import pandas as pd
 
 GREEN, YELLOW, RED, UNKNOWN = "green", "yellow", "red", "unknown"
 
+#: `/ops/state` が認証エラー（401/403）だったことを表す値。
+#: **`rec_db.OPS_AUTH_ERROR` と同じ文字列でなければならない。**
+#: ここで再定義しているのは、このモジュールを純粋（DataFrame in / dict out）に保つため。
+#: 取得層（HTTP・環境変数）へ依存させない。一致は tests/test_live_metrics.py が固定する。
+OPS_AUTH_ERROR = "auth"
+
+#: 認証トークンの環境変数名。表示に使うだけ。同じく `rec_db` と一致していること。
+TOKEN_ENV = "RECOMMEND_OPS_TOKEN"
+
 FALLBACK_STRATEGY = "FALLBACK_COVERAGE"
 RECOMMEND_STRATEGY = "RECOMMEND"
 
@@ -136,19 +145,35 @@ def recent_unlock_count(unlock_events: pd.DataFrame, now: pd.Timestamp, window_m
     )
 
 
-def ops_state_signals(ops_state: dict | None) -> list[Signal]:
+def ops_state_signals(ops_state: dict | None, status: str | None = None) -> list[Signal]:
     """`/ops/state` 由来の項目（γ・規則本数・被覆率・応答時間）。
 
     `ops_state` が None のとき、各項目を「取得不能」（level=unknown）で返し、
     **他の指標は止めない**（03「/ops/state が取れないとき」）。
+
+    `status` が `OPS_AUTH_ERROR`（401/403）のときだけ「認証エラー」と出し分ける。
+    **当日「トークンの設定漏れ」と「推薦エンジンが落ちている」を画面上で区別するため**であり、
+    表示の親切さの話ではない。打てる手がまったく違う（前者は env を直す、後者はエンジンを見る）。
     """
     if ops_state is None:
-        na = "取得不能"
+        auth = status == OPS_AUTH_ERROR
+        na = "認証エラー" if auth else "取得不能"
+        detail = (f"{na}（{TOKEN_ENV} を確認）" if auth else na)
+        first_action = (
+            f"{TOKEN_ENV} が未設定か誤っている。"
+            "推薦サービスの OPS_TOKEN と同じ値を設定する（エンジン自体は生きている可能性が高い）"
+            if auth else
+            "/ops/state 取得失敗そのものが、フォールバック率と併せて障害のサイン。品質ゲートは下げない"
+        )
+        rest_action = (
+            "認証を直せば取得できる" if auth else "取得でき次第"
+        )
         return [
-            Signal("drsa_quality", "DRSA 品質（γ・確実規則）", na, UNKNOWN, na,
-                   "/ops/state 取得失敗そのものが、フォールバック率と併せて障害のサイン。品質ゲートは下げない"),
-            Signal("rule_coverage", "規則の被覆率", na, UNKNOWN, na, "取得でき次第、0.3 を下回っていないか確認する"),
-            Signal("latency_p95", "応答時間 p95", na, UNKNOWN, na, "取得でき次第、600ms 未満か確認する"),
+            Signal("drsa_quality", "DRSA 品質（γ・確実規則）", na, UNKNOWN, detail, first_action),
+            Signal("rule_coverage", "規則の被覆率", na, UNKNOWN, detail,
+                   f"{rest_action}、0.3 を下回っていないか確認する"),
+            Signal("latency_p95", "応答時間 p95", na, UNKNOWN, detail,
+                   f"{rest_action}、600ms 未満か確認する"),
         ]
     gamma = ops_state.get("gamma")
     n_certain = ops_state.get("n_certain_rules")
@@ -170,14 +195,15 @@ def ops_state_signals(ops_state: dict | None) -> list[Signal]:
 
 
 def signal_board(unlock_events: pd.DataFrame, check_ins: pd.DataFrame, booth_ratings: pd.DataFrame,
-                 ops_state: dict | None, now: pd.Timestamp) -> list[Signal]:
+                 ops_state: dict | None, now: pd.Timestamp,
+                 ops_status: str | None = None) -> list[Signal]:
     """画面1（信号機）の全項目。この順で縦に並べる。"""
     return [
         fallback_rate(unlock_events, now),
         rating_recovery_rate(booth_ratings, check_ins),
         current_phase(unlock_events, now),
         recent_unlock_count(unlock_events, now),
-        *ops_state_signals(ops_state),
+        *ops_state_signals(ops_state, ops_status),
     ]
 
 

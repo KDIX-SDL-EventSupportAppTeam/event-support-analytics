@@ -17,6 +17,7 @@
 
 `/ops/state`（推薦エンジン）は **别扱い**。落ちていても画面全体を止めない
 （02 §1）。`OpsStateClient.fetch()` は失敗時に None を返す。
+本番の `/ops/*` は `X-Ops-Token`（`RECOMMEND_OPS_TOKEN`）で保護されている（推薦側 ADR 0008）。
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ import os
 import urllib.error
 import urllib.request
 from pathlib import Path
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 import pandas as pd
 
@@ -332,31 +333,79 @@ def load_tables(source: Source, names: tuple[str, ...] | None = None, *,
     return {n: tables[n] for n in names}
 
 
-class OpsStateClient:
-    """推薦エンジンの `/ops/state`。**取得できなくても画面を止めない**（02 §1）。"""
+#: `/ops/state` の取得結果の区別（03「/ops/state が取れないとき」）。
+#: **「トークンの設定漏れ」と「推薦エンジンが落ちている」を画面上で区別するため**にある。
+OPS_OK = "ok"
+OPS_AUTH_ERROR = "auth"          # 401 / 403。こちらの設定の問題
+OPS_UNAVAILABLE = "unavailable"  # 接続失敗・タイムアウト・404・5xx。向こうの問題
 
-    def __init__(self, base_url: str | None, timeout_sec: float = 3.0) -> None:
+
+class OpsStateResult(NamedTuple):
+    """`OpsStateClient.fetch_result()` の戻り。**例外は投げない**ので、失敗はここに載る。"""
+
+    state: dict | None
+    status: str
+
+
+class OpsStateClient:
+    """推薦エンジンの `/ops/state`。**取得できなくても画面を止めない**（02 §1）。
+
+    本番の `/ops/*` は `OPS_TOKEN` による認証が必須である（推薦側 ADR 0008）。
+    **未設定なら 404、設定済みでトークン無しなら 401** になるため、
+    トークンを送らないと画面が恒久的に「取得不能」になる。
+
+    ヘッダは **`X-Ops-Token` を使う。`Authorization` は使わない。**
+    Cloud Run のプラットフォーム認証（IAM の ID トークン）が `Authorization` を使うので、
+    将来 `/ops/*` を IAM で絞るときに層が衝突する（推薦側 ADR 0008 Q-1）。
+    """
+
+    #: 推薦サービスの `OPS_TOKEN` と**同一の秘密**。Secret Manager の同じシークレットを渡す。
+    TOKEN_ENV = "RECOMMEND_OPS_TOKEN"
+
+    #: 認証ヘッダ。**`Authorization` に変えない**（上記の理由）。
+    TOKEN_HEADER = "X-Ops-Token"
+
+    def __init__(self, base_url: str | None, timeout_sec: float = 3.0,
+                 token: str | None = None) -> None:
         self.base_url = base_url.rstrip("/") if base_url else None
         self.timeout_sec = timeout_sec
+        self._token = (token if token is not None else os.environ.get(self.TOKEN_ENV, "")).strip()
 
     def fetch(self) -> dict | None:
-        """成功時 dict、失敗時 None。**どんな失敗でも例外を投げない。**
+        """成功時 dict、失敗時 None。**どんな失敗でも例外を投げない。**"""
+        return self.fetch_result().state
+
+    def fetch_result(self) -> OpsStateResult:
+        """取得結果を失敗の区別つきで返す。**どんな失敗でも例外を投げない。**
 
         推薦エンジンが死にかけのとき（再起動中・OOM 直前）は、接続不能だけでなく
         不正な HTTP レスポンス（`http.client.BadStatusLine` など）も返しうる。
         エンジンが最も怪しいまさにその瞬間に監視が消えては意味がないので、
         Exception まで広く捕まえる（02 §1）。
+
+        401 / 403 だけは `OPS_AUTH_ERROR` として区別する。**こちらの設定漏れと
+        推薦エンジンの停止が画面上で同じ「取得不能」に見えると当日切り分けられない。**
         """
         if not self.base_url:
-            return None
+            return OpsStateResult(None, OPS_UNAVAILABLE)
         url = f"{self.base_url}/ops/state"
+        # トークンは**ヘッダにだけ載せる**。URL のクエリにも画面にも出さない。
+        headers = {self.TOKEN_HEADER: self._token} if self._token else {}
+        req = urllib.request.Request(url, headers=headers, method="GET")
         try:
-            with urllib.request.urlopen(url, timeout=self.timeout_sec) as resp:  # noqa: S310
+            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:  # noqa: S310
                 if resp.status != 200:
-                    return None
+                    return OpsStateResult(None, OPS_UNAVAILABLE)
                 payload = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # 401: トークン未設定・誤り。403: 拒否。どちらもこちら側で直せる。
+            # 404 は「OPS_TOKEN 未設定でルート自体が無い」＝向こうの設定なので unavailable。
+            status = OPS_AUTH_ERROR if exc.code in (401, 403) else OPS_UNAVAILABLE
+            return OpsStateResult(None, status)
         except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ValueError, OSError):
-            return None
+            return OpsStateResult(None, OPS_UNAVAILABLE)
         except Exception:  # noqa: BLE001 - 監視を落とさないことを最優先する
-            return None
-        return payload if isinstance(payload, dict) else None
+            return OpsStateResult(None, OPS_UNAVAILABLE)
+        if not isinstance(payload, dict):
+            return OpsStateResult(None, OPS_UNAVAILABLE)
+        return OpsStateResult(payload, OPS_OK)
