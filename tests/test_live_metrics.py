@@ -125,3 +125,13 @@ def test_ops_state_signals_distinguish_auth_error():
     assert all(s.value == "取得不能" for s in unavailable)
     assert all(s.value == "認証エラー" for s in auth)
     assert all("RECOMMEND_OPS_TOKEN" in s.detail for s in auth)
+
+
+def test_ops_status_vocabulary_matches_rec_db():
+    """`live_metrics` は取得層に依存しないよう定数を再定義している。**ずれたら無言で壊れる。**
+
+    `rec_db` が返す文字列と `live_metrics` が比較する文字列が一致しなくなると、
+    認証エラーが「取得不能」に戻り、当日の切り分けができなくなる。
+    """
+    assert lm.OPS_AUTH_ERROR == rec_db.OPS_AUTH_ERROR
+    assert lm.TOKEN_ENV == rec_db.OpsStateClient.TOKEN_ENV
