@@ -271,3 +271,89 @@ def test_ops_state_client_rejects_non_dict_payload(monkeypatch):
 
     monkeypatch.setattr(rec_db.urllib.request, "urlopen", lambda *_a, **_k: _Resp())
     assert rec_db.OpsStateClient("http://example.invalid").fetch() is None
+
+
+# --- /ops/state の認証（推薦側 ADR 0008 Q-1） -------------------------------
+
+
+class _OpsResp:
+    """`urlopen` の戻りの最小限。"""
+
+    status = 200
+
+    def __init__(self, body: bytes = b'{"gamma": 0.7}') -> None:
+        self._body = body
+
+    def read(self):
+        return self._body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+
+def _capture_request(monkeypatch) -> list:
+    seen = []
+
+    def fake_urlopen(req, *_a, **_k):
+        seen.append(req)
+        return _OpsResp()
+
+    monkeypatch.setattr(rec_db.urllib.request, "urlopen", fake_urlopen)
+    return seen
+
+
+def test_ops_state_client_sends_x_ops_token_header(monkeypatch):
+    """**`Authorization` は使わない。** Cloud Run の IAM 認証と層を分けるため（ADR 0008 Q-1）。"""
+    monkeypatch.setenv(rec_db.OpsStateClient.TOKEN_ENV, "s3cret")
+    seen = _capture_request(monkeypatch)
+
+    assert rec_db.OpsStateClient("http://example.invalid").fetch() == {"gamma": 0.7}
+
+    headers = seen[0].headers  # urllib はヘッダ名を capitalize する
+    assert headers.get("X-ops-token") == "s3cret"
+    assert "Authorization" not in headers
+    # トークンを URL に載せない
+    assert "s3cret" not in seen[0].full_url
+
+
+def test_ops_state_client_omits_header_without_token(monkeypatch):
+    monkeypatch.delenv(rec_db.OpsStateClient.TOKEN_ENV, raising=False)
+    seen = _capture_request(monkeypatch)
+
+    rec_db.OpsStateClient("http://example.invalid").fetch()
+
+    assert "X-ops-token" not in seen[0].headers
+
+
+@pytest.mark.parametrize("code", [401, 403])
+def test_ops_state_client_reports_auth_error(monkeypatch, code):
+    """401/403 は「取得不能」と区別する。**設定漏れとエンジン停止は打つ手が違う。**"""
+    def boom(*_a, **_k):
+        raise urllib.error.HTTPError("http://example.invalid", code, "no", {}, None)
+
+    monkeypatch.setattr(rec_db.urllib.request, "urlopen", boom)
+    result = rec_db.OpsStateClient("http://example.invalid").fetch_result()
+    assert result == rec_db.OpsStateResult(None, rec_db.OPS_AUTH_ERROR)
+
+
+@pytest.mark.parametrize("code", [404, 500, 503])
+def test_ops_state_client_reports_unavailable_for_other_http_errors(monkeypatch, code):
+    """404（OPS_TOKEN 未設定でルート自体が無い）や 5xx は向こう側の問題＝取得不能。"""
+    def boom(*_a, **_k):
+        raise urllib.error.HTTPError("http://example.invalid", code, "no", {}, None)
+
+    monkeypatch.setattr(rec_db.urllib.request, "urlopen", boom)
+    result = rec_db.OpsStateClient("http://example.invalid").fetch_result()
+    assert result.status == rec_db.OPS_UNAVAILABLE
+
+
+def test_ops_state_client_never_raises_on_auth_error(monkeypatch):
+    """認証エラーでも例外を投げない（02 §1。監視全体を止めない）。"""
+    def boom(*_a, **_k):
+        raise urllib.error.HTTPError("http://example.invalid", 401, "no", {}, None)
+
+    monkeypatch.setattr(rec_db.urllib.request, "urlopen", boom)
+    assert rec_db.OpsStateClient("http://example.invalid").fetch() is None

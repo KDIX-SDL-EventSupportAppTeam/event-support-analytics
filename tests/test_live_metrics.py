@@ -7,6 +7,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import live_metrics as lm  # noqa: E402
+import rec_db  # noqa: E402
 import synth_rec_data as synth  # noqa: E402
 
 NOW = pd.Timestamp("2026-10-16T06:00:00Z")
@@ -113,3 +114,14 @@ def test_synth_recommender_dead_drives_fallback_red():
     ue = tables["card_unlock_events"]
     now = pd.to_datetime(ue["created_at"], utc=True).max()
     assert lm.fallback_rate(ue, now, window_min=600).level == lm.RED
+
+
+def test_ops_state_signals_distinguish_auth_error():
+    """**設定漏れとエンジン停止を画面上で区別する**（推薦側 ADR 0008 Q-1）。"""
+    unavailable = lm.ops_state_signals(None)
+    auth = lm.ops_state_signals(None, rec_db.OPS_AUTH_ERROR)
+
+    assert [s.level for s in auth] == [lm.UNKNOWN] * 3  # 品質ゲートの扱いは変えない
+    assert all(s.value == "取得不能" for s in unavailable)
+    assert all(s.value == "認証エラー" for s in auth)
+    assert all("RECOMMEND_OPS_TOKEN" in s.detail for s in auth)
