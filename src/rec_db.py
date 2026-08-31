@@ -29,19 +29,27 @@ from typing import Protocol
 
 import pandas as pd
 
-# 当日の監視に使うテーブル（02 §2）。取得してはならない列は最初から SELECT しない。
+# 当日の監視に使うテーブルと列（02 §2）。取得してはならない列は最初から SELECT しない。
+#
+# 列は event-support-server の db/create-tables.sql に合わせてある。
+# **card_unlock_events と bingo_cells は user_id を持たない**（card_id 経由で bingo_cards にある）。
+# ここを取り違えると、存在しない列を SELECT して当日に落ちる。
 LIVE_TABLES: dict[str, tuple[str, ...]] = {
+    "bingo_cards": ("id", "event_id", "user_id"),
     "card_unlock_events": (
-        "user_id",
-        "strategy",
+        "id",
+        "card_id",
         "phase",
+        "strategy",
         "decision_table_size",
         "global_checkin_count",
         "created_at",
     ),
-    "check_ins": ("id", "user_id", "booth_id", "cell_id", "visit_order", "checked_in_at"),
-    "booth_ratings": ("checkin_id", "rating", "scale", "rated_at"),
+    "check_ins": ("id", "user_id", "booth_id", "event_id", "cell_id", "visit_order", "checked_in_at"),
+    "booth_ratings": ("checkin_id", "user_id", "booth_id", "event_id", "rating", "scale", "rated_at"),
     "recommendation_scores": (
+        "id",
+        "unlock_event_id",
         "user_id",
         "booth_id",
         "was_assigned",
@@ -52,9 +60,12 @@ LIVE_TABLES: dict[str, tuple[str, ...]] = {
         "reason_payload",
         "created_at",
     ),
-    "bingo_cells": ("user_id", "booth_id", "is_revealed", "is_achieved", "source"),
+    "bingo_cells": ("id", "card_id", "position", "booth_id", "is_revealed", "is_achieved", "source"),
     "users": ("id", "role"),
 }
+
+# card_id しか持たないテーブル。読み込み後に bingo_cards から user_id / event_id を補う。
+CARD_KEYED_TABLES = ("card_unlock_events", "bingo_cells")
 
 # 事後の分析で追加で使うテーブル（02 §2）
 POST_TABLES: dict[str, tuple[str, ...]] = {
@@ -129,6 +140,40 @@ def _reject_forbidden(name: str, columns) -> None:
         raise ValueError(f"{name} に取得禁止の列が含まれる: {hit}（02 §2）。取得側で除外すること")
 
 
+def attach_card_owner(df: pd.DataFrame, cards: pd.DataFrame, *, card_col: str = "card_id") -> pd.DataFrame:
+    """`card_id` しか持たないテーブルに `user_id` / `event_id` を付ける。
+
+    `card_unlock_events` と `bingo_cells` は実スキーマ上 `user_id` を持たない。
+    指標・画面はどれも `user_id` で集計するので、**この関数を通してから渡す**。
+    """
+    if df.empty or card_col not in df.columns:
+        return df
+    keys = [c for c in ("id", "user_id", "event_id") if c in cards.columns]
+    lookup = cards[keys].rename(columns={"id": card_col})
+    return df.merge(lookup, on=card_col, how="left")
+
+
+def scope_to_event(tables: dict[str, pd.DataFrame], event_id: str | None) -> dict[str, pd.DataFrame]:
+    """1イベントぶんに絞る。**絞り込み規則はここだけに書く**（ADR 0001）。
+
+    `recommendation_scores` / `card_unlock_events` に `event_id` 列は無いため、
+    `card_unlock_events` → `bingo_cards` の JOIN（`attach_card_owner`）で得た
+    `event_id` を使う。
+
+    **`users.event_id` では絞らない。** 出展者・運営アカウントが混ざるため
+    （event-support-server `docs/reference/api-endpoints.md`）。
+    """
+    if event_id is None:
+        return tables
+    out = {}
+    for name, df in tables.items():
+        if name == "users" or df.empty or "event_id" not in df.columns:
+            out[name] = df
+        else:
+            out[name] = df[df["event_id"] == event_id].copy()
+    return out
+
+
 def participants_only(df: pd.DataFrame, users: pd.DataFrame, *, user_col: str = "user_id") -> pd.DataFrame:
     """`role <> 'participant'` を全集計から除外する（02 §2）。
 
@@ -141,6 +186,40 @@ def participants_only(df: pd.DataFrame, users: pd.DataFrame, *, user_col: str = 
     if not staff:
         return df
     return df[~df[user_col].isin(staff)].copy()
+
+
+def load_tables(source: Source, names: tuple[str, ...] | None = None, *,
+                event_id: str | None = None, exclude_staff: bool = True) -> dict[str, pd.DataFrame]:
+    """指標・画面が使う形までまとめて整えて返す。**取得の作法はここに集約する。**
+
+    1. 必要なテーブルを読む
+    2. `card_id` しか持たないテーブルに `user_id` / `event_id` を付ける
+    3. イベントで絞る（指定時）
+    4. `role <> 'participant'` を除外する
+
+    画面側はこれを呼ぶだけでよい。取得口（ダンプ／合成／プロキシ）は問わない。
+    """
+    names = names or tuple(LIVE_TABLES)
+    need = set(names) | ({"bingo_cards"} if set(names) & set(CARD_KEYED_TABLES) else set())
+    need |= {"users"} if exclude_staff else set()
+
+    tables = {n: source.table(n) for n in need}
+
+    cards = tables.get("bingo_cards")
+    if cards is not None:
+        for name in CARD_KEYED_TABLES:
+            if name in tables:
+                tables[name] = attach_card_owner(tables[name], cards)
+
+    tables = scope_to_event(tables, event_id)
+
+    if exclude_staff:
+        users = tables["users"]
+        for name, df in tables.items():
+            if name != "users" and "user_id" in df.columns:
+                tables[name] = participants_only(df, users)
+
+    return {n: tables[n] for n in names}
 
 
 class OpsStateClient:
