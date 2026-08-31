@@ -108,6 +108,11 @@ def render(source_dir: str, ops_url: str) -> None:
     except FileNotFoundError as exc:
         st.error(f"{exc}\n\n`python src/synth_rec_data.py --out {source_dir}` で合成データを作れます。")
         return
+    except RuntimeError as exc:
+        # 取得口が本番プロキシのとき、1回の失敗（500・タイムアウト）で画面を殺さない。
+        # 45秒後の再描画で復帰しうるので、状況だけ出して待つ（02 §1 と同じ扱い）。
+        st.error(f"{exc}\n\n{REFRESH_SEC}秒後に再試行します。")
+        return
     ops = load_ops_state(source_dir, ops_url)
 
     st.caption(f"最終更新 {to_jst(now):%H:%M:%S} JST　/　{REFRESH_SEC}秒ごとに自動更新"

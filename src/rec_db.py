@@ -3,13 +3,14 @@
 仕様: docs/specs/recommendation-evaluation/02-data-source.md
 
 このリポジトリは去年 Firestore の一度限りのダンプを扱ってきた（dump_firestore.py）。
-今年は MySQL であり、当日はライブで読む必要がある。ただし **接続経路が未確定**
-（仕様 E-1 / 02 §4）。決まるまで当日ダッシュボードは本番接続できない。
+今年は MySQL であり、当日はライブで読む必要がある。接続経路は **ADR 0001（案A′）** で決まった:
+さくら上の PHP ラッパー API に読み取り専用の口を1つ足し、その鍵だけをここに配る。
+**MySQL への直接接続はできない**（さくら Standard が許さない）。
 
 そこで取得口を差し替え可能にする:
 
 - `DumpSource`     … イベント後のダンプ1回ぶん（CSV/Parquet ディレクトリ）。事後分析はこれで足りる
-- `SqlSource`      … MySQL への接続。経路が決まったら実装する（現在は NotImplementedError）
+- `SqlSource`      … 読み取り専用プロキシ経由の本番 MySQL（ADR 0001）。環境変数を設定すれば動く
 - `SynthSource`    … リハーサル用の合成データ（synth_rec_data.py が書き出したディレクトリ）
 
 いずれも同じ `table(name)` を返すので、metrics 層・画面層は取得口を意識しない。
@@ -22,6 +23,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -118,20 +120,128 @@ class SynthSource(DumpSource):
 
 
 class SqlSource:
-    """MySQL 接続。**接続経路が未確定のため未実装**（仕様 E-1 / 02 §4）。
+    """さくらの**読み取り専用プロキシ**経由で今年の MySQL を読む（ADR 0001 案A′）。
 
-    経路が決まったら、ここに 1リクエスト=1SQL・トランザクション無し（さくらプロキシ）
-    の制約を織り込んで実装する。`LIVE_TABLES` の列だけを SELECT すること。
+    `POST <base_url>` に `{"sql": ..., "params": [...]}` を投げ、
+    `{"rows": [...], "affectedRows": n, "insertId": ...}` を受ける
+    （契約は `event-support-server/src/db/http-proxy.ts`）。
+
+    制約:
+
+    - **1リクエスト = 1SQL。** トランザクションも行ロックも無い
+    - **エラーはすべて HTTP 500 に潰れる。** MySQL のエラーコードは取れないので、
+      「何を試したか」（どのテーブルか）だけを例外に載せる。**SQL 本文と鍵は載せない**
+
+    安全側の担保（権限が最終的な保証だが、クライアント側でも二重に持つ）:
+
+    - テーブル名は `LIVE_TABLES` / `POST_TABLES` のキーのみ。任意の文字列を SQL に入れない
+    - 列も同じ定義から組み立てる。`SELECT *` を書かないので `FORBIDDEN_COLUMNS` は構造的に要求できない
+    - 組み立てた SQL が `SELECT` で始まらなければ送信前に拒否する
     """
 
-    def __init__(self, *_args, **_kwargs) -> None:
-        raise NotImplementedError(
-            "今年の MySQL への接続経路が未確定（docs/specs/recommendation-evaluation/02-data-source.md §4, E-1）。"
-            "決まるまでは DumpSource / SynthSource を使う。"
-        )
+    #: 読み取り専用の口の URL / 鍵。**書き込み可能な `SAKURA_PROXY_*` とは別物**（要件4）。
+    URL_ENV = "REC_READONLY_PROXY_URL"
+    KEY_ENV = "REC_READONLY_PROXY_KEY"
 
-    def table(self, name: str) -> pd.DataFrame:  # pragma: no cover - 到達しない
-        raise NotImplementedError
+    # サーバー側のタイムアウトが 30 秒。当日画面は 45 秒ごとに更新されるので、
+    # 1テーブルで 45 秒を食い潰さないよう既定はそれより短く取る。
+    DEFAULT_TIMEOUT_SEC = 20.0
+
+    # DATETIME は UTC で入っている（AGENTS.md「タイムスタンプは UTC 保存」）。
+    # DumpSource と同じ列を同じ形（tz-aware UTC）に揃える。
+    _DATETIME_COLS = DumpSource._DATETIME_COLS
+
+    def __init__(self, base_url: str | None = None, key: str | None = None, *,
+                 timeout_sec: float | None = None) -> None:
+        self.base_url = (base_url or os.environ.get(self.URL_ENV) or "").strip()
+        self._key = (key or os.environ.get(self.KEY_ENV) or "").strip()
+        self.timeout_sec = timeout_sec if timeout_sec is not None else self.DEFAULT_TIMEOUT_SEC
+        missing = [n for n, v in ((self.URL_ENV, self.base_url), (self.KEY_ENV, self._key)) if not v]
+        if missing:
+            raise RuntimeError(
+                f"読み取り専用プロキシの接続情報が無い: {', '.join(missing)} を設定すること"
+                "（ADR 0001 案A′。書き込み可能な SAKURA_PROXY_* は使わない）"
+            )
+
+    # -- SQL の組み立て（テーブル名も列も定義から作る。外から文字列を受けない） --
+
+    @staticmethod
+    def columns_for(name: str) -> tuple[str, ...]:
+        """`LIVE_TABLES` / `POST_TABLES` に定義された列。未知のテーブルは拒否する。"""
+        cols = LIVE_TABLES.get(name) or POST_TABLES.get(name)
+        if not cols:
+            raise ValueError(
+                f"未知のテーブル: {name!r}。LIVE_TABLES / POST_TABLES に定義されたものだけを読む"
+            )
+        _reject_forbidden(name, cols)
+        return cols
+
+    @classmethod
+    def build_sql(cls, name: str) -> str:
+        cols = cls.columns_for(name)
+        sql = f"SELECT {', '.join(f'`{c}`' for c in cols)} FROM `{name}`"
+        if not _is_select_only(sql):
+            raise ValueError(f"SELECT 以外は送らない（組み立てに失敗した）: {name}")
+        return sql
+
+    # -- 送信 --
+
+    def table(self, name: str) -> pd.DataFrame:
+        sql = self.build_sql(name)
+        rows = self._post(sql, name)
+        return self._to_frame(name, rows)
+
+    def _post(self, sql: str, name: str) -> list:
+        body = json.dumps({"sql": sql, "params": []}).encode("utf-8")
+        req = urllib.request.Request(
+            self.base_url,
+            data=body,
+            headers={"Content-Type": "application/json", "X-Proxy-Key": self._key},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:  # noqa: S310
+                if resp.status != 200:
+                    raise _proxy_error(name, f"HTTP {resp.status}")
+                payload = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # プロキシは MySQL のエラーをすべて 500 に潰す（server ADR 0001）。
+            # 中身は分からない前提で、何を試したかだけを残す。
+            raise _proxy_error(name, f"HTTP {exc.code}") from None
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, OSError) as exc:
+            raise _proxy_error(name, type(exc).__name__) from None
+        except ValueError:
+            raise _proxy_error(name, "応答が JSON ではない") from None
+        if not isinstance(payload, dict) or not isinstance(payload.get("rows"), list):
+            raise _proxy_error(name, "応答に rows が無い")
+        return payload["rows"]
+
+    def _to_frame(self, name: str, rows: list) -> pd.DataFrame:
+        cols = self.columns_for(name)
+        df = pd.DataFrame(rows, columns=list(cols)) if rows else pd.DataFrame(columns=list(cols))
+        # 行が dict でない/列が欠けている場合でも、定義した列だけの形に揃える
+        df = df.reindex(columns=list(cols))
+        for col in self._DATETIME_COLS & set(df.columns):
+            df[col] = pd.to_datetime(df[col], utc=True, errors="coerce")
+        _reject_forbidden(name, df.columns)
+        return df
+
+
+def _is_select_only(sql: str) -> bool:
+    """SELECT 1文だけであること。権限の前に、クライアント側でも書き込みを拒む（要件3）。"""
+    s = sql.strip().rstrip(";").strip()
+    if not s.upper().startswith("SELECT"):
+        return False
+    return ";" not in s
+
+
+def _proxy_error(name: str, detail: str) -> RuntimeError:
+    """**SQL 本文と鍵は絶対に載せない。** 何を読もうとしたかだけを残す（要件5）。"""
+    return RuntimeError(
+        f"読み取り専用プロキシからの取得に失敗した（テーブル: {name} / {detail}）。"
+        "プロキシは MySQL のエラーを 500 に潰すため原因は判別できない"
+        f"（{SqlSource.URL_ENV} の到達性と口の権限を確認する）"
+    )
 
 
 def _reject_forbidden(name: str, columns) -> None:
