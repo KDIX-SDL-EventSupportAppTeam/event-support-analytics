@@ -157,15 +157,58 @@ def test_scope_to_event_filters_recommendation_scores_across_events():
 def test_attach_scores_event_id_survives_empty_and_missing_columns():
     """空 DataFrame・列欠けで落ちないこと（取得層の例外は当日描画を丸ごと落とす）。"""
     cols = list(rec_db.LIVE_TABLES["recommendation_scores"])
-    empty = pd.DataFrame(columns=cols)
     cards = pd.DataFrame({"id": ["card-A"], "event_id": ["evt-A"]})
     unlocks = pd.DataFrame({"id": ["unlock-A"], "card_id": ["card-A"]})
-
-    assert rec_db.attach_scores_event_id(empty, unlocks, cards).empty
-
     scores = pd.DataFrame({"id": ["s1"], "unlock_event_id": ["unlock-A"], "user_id": ["uA"]})
-    out = rec_db.attach_scores_event_id(scores, pd.DataFrame(), cards)
-    assert "event_id" not in out.columns  # unlocks 列欠け → 何もしない
+
+    assert rec_db.attach_scores_event_id(pd.DataFrame(columns=cols), unlocks, cards).empty
+
+    # 相手が空でも列があるとき: 解決できず event_id は NaN。列は割らず1本のまま。
+    empty_unlocks = pd.DataFrame(columns=["id", "card_id"])
+    out = rec_db.attach_scores_event_id(scores, empty_unlocks, cards)
+    assert list(out.columns).count("event_id") == 1
+    assert out["event_id"].isna().all()
+
+    # 相手の列が欠けているとき: 何もせず返す（例外を投げない）。
+    assert "event_id" not in rec_db.attach_scores_event_id(scores, pd.DataFrame(), cards).columns
+    assert "event_id" not in rec_db.attach_scores_event_id(scores, unlocks, pd.DataFrame()).columns
+
+
+def test_attach_scores_event_id_is_noop_when_event_id_already_present():
+    """`event_id` を既に持つ入力を割らないこと。
+
+    merge すると `event_id_x` / `event_id_y` になり、`scope_to_event()` が
+    「event_id 列が無い表」として素通しする（issue #14 の失敗がそのまま戻る）。
+    ダンプ／合成データは CSV にある列をそのまま読むため、実際に起こりうる。
+    """
+    cards = pd.DataFrame({"id": ["card-A", "card-B"], "event_id": ["evt-A", "evt-B"]})
+    unlocks = pd.DataFrame({"id": ["unlock-A", "unlock-B"], "card_id": ["card-A", "card-B"]})
+    scores = pd.DataFrame({
+        "id": ["s1", "s2"],
+        "unlock_event_id": ["unlock-A", "unlock-B"],
+        "user_id": ["uA", "uB"],
+        "event_id": ["evt-A", "evt-B"],
+    })
+
+    out = rec_db.attach_scores_event_id(scores, unlocks, cards)
+    assert "event_id_x" not in out.columns and "event_id_y" not in out.columns
+    assert list(out.columns).count("event_id") == 1
+    # 割れていなければ絞り込みが効く。
+    scoped = rec_db.scope_to_event({"recommendation_scores": out}, "evt-A")
+    assert list(scoped["recommendation_scores"]["id"]) == ["s1"]
+
+
+def test_scope_to_event_drops_scores_that_cannot_be_resolved():
+    """解決できない行は除外側に倒れること（05 §3）。card_unlock_events と同じ扱い。"""
+    tables = _two_event_tables()
+    ghost = tables["recommendation_scores"].iloc[[0]].copy()
+    ghost["id"] = ["score-ghost"]
+    ghost["unlock_event_id"] = ["unlock-MISSING"]  # card_unlock_events に無い
+    tables["recommendation_scores"] = pd.concat(
+        [tables["recommendation_scores"], ghost], ignore_index=True)
+
+    out = rec_db.load_tables(_InMemory(tables), ("recommendation_scores",), event_id="evt-A")
+    assert list(out["recommendation_scores"]["id"]) == ["score-A"]
 
 
 def test_unlock_events_join_to_scores_by_unlock_event_id(raw):

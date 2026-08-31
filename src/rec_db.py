@@ -277,9 +277,21 @@ def attach_scores_event_id(
     `recommendation_scores` は**すでに `user_id` を持つ**ため素直に merge すると
     `user_id_x` / `user_id_y` に割れて後続の `participants_only()` が壊れる。
 
+    **`event_id` を既に持つ入力には何もしない。** 同じ理由で merge すると
+    `event_id_x` / `event_id_y` に割れ、`scope_to_event()` が「`event_id` 列が無い表」
+    として素通しする（=イベントで絞られない、という issue #14 の失敗がそのまま戻る）。
+    `SqlSource` は `LIVE_TABLES` の列しか SELECT しないので起きないが、
+    ダンプ／合成データは CSV にある列をそのまま読む。
+
+    解決できない行（`unlock_event_id` が `card_unlock_events` に無い）は
+    `event_id` が NaN になり、**絞り込み時に除外される**。`card_unlock_events` の
+    `attach_card_owner()` 経路と同じ扱い（05 §3）。
+
     空 DataFrame・列欠けでは何もせず返す（当日監視の描画を落とさない。02 §4）。
     """
     if df.empty or key_col not in df.columns:
+        return df
+    if "event_id" in df.columns:
         return df
     if not {"id", "card_id"} <= set(unlocks.columns):
         return df
