@@ -75,7 +75,7 @@
 
 | # | 事項 | 影響 | 前提 |
 |---|---|---|---|
-| I-1 | **`rec_db.SqlSource` の実装**（`NotImplementedError` のまま） | **当日監視が本番で使えない。** 現状はすべて合成データ | E-1 |
+| ~~I-1~~ | ~~**`rec_db.SqlSource` の実装**~~ → 実装済み（読み取り専用プロキシ経由、[ADR 0001](../../decisions/adrs/0001-今年のデータ取得はプロキシの読み取り専用の口を使う.md)）。検証はモックのみ。**さくら側の口の用意と、画面の取得口の差し替えが残る** | E-1 |
 | I-2 | `rules_built` ログの回収経路（`gcloud logging read` → `data/raw/`）を通す | [04](04-post-analysis.md) 図⑤が作れない。**当日の夜に初めて試さない**（[02](02-data-source.md) §5） | — |
 | I-3 | `event-support-recommend` の `features/` を実際に import して動かす（`REC_FEATURES_PATH`） | `rec_features.py` は seam のみ。実 import は未検証 | 推薦リポジトリの `features/` の完成 |
 | I-4 | 図③の「去年の自発訪問での不一致率」の接続 | 比較対象が1つ欠ける | E-3 |
