@@ -154,24 +154,67 @@ def test_scope_to_event_filters_recommendation_scores_across_events():
     assert set(unscoped["recommendation_scores"]["id"]) == {"score-A", "score-B"}
 
 
+def _scoped_len(df, event_id="evt-A"):
+    """`attach_scores_event_id()` の結果を実際に絞り込みへ通し、残る行数を返す。
+
+    「例外が出ないこと」だけを見ると、`event_id` 列を付けずに返す実装を通してしまう。
+    その場合 `scope_to_event()` は全件素通しし、他イベントの行が黙って混ざる。
+    **必ず絞り込みまで通して確かめる。**
+    """
+    return len(rec_db.scope_to_event({"recommendation_scores": df}, event_id)["recommendation_scores"])
+
+
 def test_attach_scores_event_id_survives_empty_and_missing_columns():
-    """空 DataFrame・列欠けで落ちないこと（取得層の例外は当日描画を丸ごと落とす）。"""
+    """空 DataFrame・列欠けで落ちず、かつ絞り込みが素通しにならないこと（02 §4 / 05 §3）。"""
     cols = list(rec_db.LIVE_TABLES["recommendation_scores"])
     cards = pd.DataFrame({"id": ["card-A"], "event_id": ["evt-A"]})
     unlocks = pd.DataFrame({"id": ["unlock-A"], "card_id": ["card-A"]})
-    scores = pd.DataFrame({"id": ["s1"], "unlock_event_id": ["unlock-A"], "user_id": ["uA"]})
+    # 2件とも他イベント（evt-B）に属する。素通しすれば 2 件残ってしまう。
+    scores = pd.DataFrame({
+        "id": ["s1", "s2"],
+        "unlock_event_id": ["unlock-B1", "unlock-B2"],
+        "user_id": ["uB", "uB"],
+    })
 
+    # 空の入力はそもそも解決対象外。そのまま返る。
     assert rec_db.attach_scores_event_id(pd.DataFrame(columns=cols), unlocks, cards).empty
 
-    # 相手が空でも列があるとき: 解決できず event_id は NaN。列は割らず1本のまま。
+    # 相手が空でも列があるとき: 解決できず event_id は NaN → 絞り込みで落ちる。
     empty_unlocks = pd.DataFrame(columns=["id", "card_id"])
     out = rec_db.attach_scores_event_id(scores, empty_unlocks, cards)
     assert list(out.columns).count("event_id") == 1
     assert out["event_id"].isna().all()
+    assert _scoped_len(out) == 0
 
-    # 相手の列が欠けているとき: 何もせず返す（例外を投げない）。
-    assert "event_id" not in rec_db.attach_scores_event_id(scores, pd.DataFrame(), cards).columns
-    assert "event_id" not in rec_db.attach_scores_event_id(scores, unlocks, pd.DataFrame()).columns
+
+@pytest.mark.parametrize("broken", ["unlocks", "cards"])
+def test_attach_scores_event_id_does_not_pass_through_when_join_is_unusable(broken):
+    """辿る先の表が使えないとき、**全件素通ししない**こと。
+
+    列を付けずに返すと `scope_to_event()` が「event_id 列が無い表」として
+    全件通し、他イベントの行が黙って混ざる（issue #14 の症状に逆戻り）。
+    行単位で除外側に倒すなら表単位でも倒す（05 §3）。
+    """
+    cards = pd.DataFrame({"id": ["card-A"], "event_id": ["evt-A"]})
+    unlocks = pd.DataFrame({"id": ["unlock-A"], "card_id": ["card-A"]})
+    scores = pd.DataFrame({
+        "id": ["s1", "s2"],
+        "unlock_event_id": ["unlock-A", "unlock-B"],
+        "user_id": ["uA", "uB"],
+    })
+    if broken == "unlocks":
+        unlocks = unlocks[["id"]]  # card_id が欠けている
+    else:
+        cards = cards[["id"]]      # event_id が欠けている
+
+    out = rec_db.attach_scores_event_id(scores, unlocks, cards)  # 例外を投げない（02 §4）
+    assert "event_id" in out.columns, "event_id 列が無いと scope_to_event() が全件素通しする"
+    assert out["event_id"].isna().all()
+    assert len(out) == len(scores), "行を落とすのは絞り込みの仕事。ここでは落とさない"
+    assert _scoped_len(out) == 0, "解決できない表は絞り込みで空になる（異常が画面で見える）"
+
+    # event_id=None（絞り込みなし）なら全件そのまま残る。
+    assert _scoped_len(out, None) == len(scores)
 
 
 def test_attach_scores_event_id_is_noop_when_event_id_already_present():

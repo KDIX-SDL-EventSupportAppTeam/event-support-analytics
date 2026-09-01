@@ -287,20 +287,34 @@ def attach_scores_event_id(
     `event_id` が NaN になり、**絞り込み時に除外される**。`card_unlock_events` の
     `attach_card_owner()` 経路と同じ扱い（05 §3）。
 
-    空 DataFrame・列欠けでは何もせず返す（当日監視の描画を落とさない。02 §4）。
+    **辿る先の表そのものが使えないとき（列欠け）も、全 NaN の `event_id` 列を付けて返す。**
+    列を付けずに返すと `scope_to_event()` が「`event_id` 列が無い表」として全件素通しし、
+    他イベントの行が黙って混ざる（issue #14 の症状そのもの）。行単位で除外側に倒すなら
+    表単位でも倒すのが筋であり、こうすると絞り込み結果が空になるので**画面で異常が見える**。
+    **例外は投げない。** 取得層の例外はその回の描画を丸ごと落とす（02 §4）。
+
+    空 DataFrame・`unlock_event_id` 列が無い入力は、そもそも解決の対象外なのでそのまま返す。
     """
     if df.empty or key_col not in df.columns:
         return df
     if "event_id" in df.columns:
         return df
     if not {"id", "card_id"} <= set(unlocks.columns):
-        return df
+        return _unresolved_event_id(df)
     if not {"id", "event_id"} <= set(cards.columns):
-        return df
+        return _unresolved_event_id(df)
     card_of_unlock = unlocks[["id", "card_id"]].rename(columns={"id": key_col})
     event_of_card = cards[["id", "event_id"]].rename(columns={"id": "card_id"})
     resolved = card_of_unlock.merge(event_of_card, on="card_id", how="left")[[key_col, "event_id"]]
     return df.merge(resolved, on=key_col, how="left")
+
+
+def _unresolved_event_id(df: pd.DataFrame) -> pd.DataFrame:
+    """イベントを解決できなかった表に、全 NaN の `event_id` を付ける（絞り込みで落ちる）。
+
+    NaN は merge の未一致が生むものと同じ `float('nan')` にする。
+    """
+    return df.assign(event_id=float("nan"))
 
 
 def scope_to_event(tables: dict[str, pd.DataFrame], event_id: str | None) -> dict[str, pd.DataFrame]:
