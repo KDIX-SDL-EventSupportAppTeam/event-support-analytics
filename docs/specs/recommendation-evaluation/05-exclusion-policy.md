@@ -65,11 +65,38 @@ server は INNER JOIN なので該当行は落ちる。**事後分析はダン�
 `card_unlock_events` / `bingo_cells` は `event_id` 列を持たないため、
 `bingo_cards` 経由で解決した `event_id` で絞る（`CARD_KEYED_TABLES`）。
 
-> **`recommendation_scores` はイベントで絞られない。**
-> `event_id` 列も `card_id` 列も持たず（持つのは `unlock_event_id`）、
-> `CARD_KEYED_TABLES` にも入っていないため、`scope_to_event()` を素通りする。
-> role による除外は `user_id` があるので効く。
-> **DB に複数イベントが同居すると他イベントの行が混ざる。**
+`recommendation_scores` は `event_id` 列も `card_id` 列も持たない（持つのは
+`unlock_event_id`）ため、`unlock_event_id` → `card_unlock_events.id` → `card_id`
+→ `bingo_cards.event_id` で `event_id` を解決してから絞る
+（`rec_db.attach_scores_event_id()`。`load_tables()` は `recommendation_scores` を
+要求されると `names` に無くても `card_unlock_events` / `bingo_cards` を取得する）。
+`user_id` は割らないため `event_id` だけをマージする（`attach_card_owner()` は流用しない）。
+role による除外は `user_id` があるので従来どおり効く。
+
+> **イベントを解決できないものは除外する。行でも表でも同じに倒す。**
+>
+> - **行**: `unlock_event_id` から `card_unlock_events` / `bingo_cards` を辿れない行は
+>   `event_id` が NaN になり、絞り込みで落ちる（`card_unlock_events` の解決失敗と同じ）
+> - **表**: 辿る先の表そのものが使えない（列が欠けている）ときも、
+>   **全 NaN の `event_id` 列を付けて**返す。結果その表は絞り込みで空になる
+
+表単位を素通しにしてはならない。`event_id` 列を付けずに返すと `scope_to_event()` は
+「`event_id` 列が無い表」として**全件通し**、他イベントの行が黙って混ざる
+——**issue #14 の症状そのものに戻る**。行を除外側に倒しておきながら表だけ通すのは
+非対称であり、しかも画面には正常に見えるぶんタチが悪い。空になるほうが異常だと分かる。
+
+**例外は投げない。** 取得層の例外はその回の描画を丸ごと落とす（[02](02-data-source.md) §4）。
+
+この「解決できなければ除外」は §2 の `participants_only()`（**残す**方に倒す）と
+**逆向き**である。意図的に分けている。role は「この人がスタッフだと**分かっている**」
+ときだけ落とせばよいが、イベント絞り込みは「このイベントの行だと**言える**」ものだけを
+入れる話であり、所属を示せない行を混ぜると他イベントのデータが紛れる。
+
+**取得順で欠けを防ぐ。** `load_tables()` は**参照される側を後に読む**
+（`recommendation_scores` → `card_unlock_events` → `bingo_cards` → `users`。
+`rec_db._FETCH_LAST`）。後から読むほうが新しいぶん、先に読んだ行の参照先を必ず含むため、
+取得の数秒のずれ（[02](02-data-source.md) §4）で直近の推薦が落ちることは通常起きない。
+逆順だと、そのずれの間に生まれた解放イベントを指すスコアが解決できず落ちる。
 
 ---
 
