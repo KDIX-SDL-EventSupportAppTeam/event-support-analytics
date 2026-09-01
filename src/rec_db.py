@@ -353,6 +353,24 @@ def participants_only(df: pd.DataFrame, users: pd.DataFrame, *, user_col: str = 
     return df[~df[user_col].isin(staff)].copy()
 
 
+#: 取得を**後回しにする**表と、その順序。**参照される側を後に読む。**
+#:
+#: 当日はテーブル間の取得に数秒のずれが出る（02 §4）。参照する側（scores）を先に、
+#: 参照される側（unlocks → cards）を後に読むと、後から読んだほうが新しいぶん、
+#: 先に読んだ行の参照先は必ず含まれる。逆順だと、その数秒に生まれた解放イベントを
+#: 指すスコアが解決できず、絞り込みで落ちる（05 §3「直近の推薦が数件欠けうる」）。
+#:
+#: `users` も同じ理由で最後に読む（新しいほど `participants_only()` が正しく効く）。
+#: `need` は set なので、明示的に並べないと反復順が実行ごとに変わる。
+_FETCH_LAST = ("card_unlock_events", "bingo_cards", "users")
+
+
+def _fetch_order(need: set[str]) -> list[str]:
+    """取得順。参照される側を後に回し、残りは名前順で決定的にする。"""
+    deferred = [n for n in _FETCH_LAST if n in need]
+    return sorted(need - set(deferred)) + deferred
+
+
 def load_tables(source: Source, names: tuple[str, ...] | None = None, *,
                 event_id: str | None = None, exclude_staff: bool = True) -> dict[str, pd.DataFrame]:
     """指標・画面が使う形までまとめて整えて返す。**取得の作法はここに集約する。**
@@ -375,7 +393,7 @@ def load_tables(source: Source, names: tuple[str, ...] | None = None, *,
         need |= {"card_unlock_events", "bingo_cards"}
     need |= {"users"} if exclude_staff else set()
 
-    tables = {n: source.table(n) for n in need}
+    tables = {n: source.table(n) for n in _fetch_order(need)}
 
     cards = tables.get("bingo_cards")
     if cards is not None:

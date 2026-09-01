@@ -241,6 +241,46 @@ def test_attach_scores_event_id_is_noop_when_event_id_already_present():
     assert list(scoped["recommendation_scores"]["id"]) == ["s1"]
 
 
+def test_fetch_order_reads_referenced_tables_last():
+    """参照される側（unlocks → cards）を後に読むこと。
+
+    当日はテーブル間の取得に数秒のずれが出る（02 §4）。参照する側を先に読めば、
+    後から読む参照先のほうが新しく、先に読んだ行の参照先を必ず含む。
+    逆順だと、その数秒に生まれた解放イベントを指すスコアが解決できず落ちる。
+    """
+    order = rec_db._fetch_order({"recommendation_scores", "card_unlock_events",
+                                 "bingo_cards", "check_ins", "users"})
+    assert order.index("recommendation_scores") < order.index("card_unlock_events")
+    assert order.index("card_unlock_events") < order.index("bingo_cards")
+    assert order[-1] == "users"
+    # need は set なので、明示しないと反復順が実行ごとに変わる。決定的であること。
+    assert order == rec_db._fetch_order(set(order))
+
+
+def test_load_tables_resolves_scores_when_unlocks_are_fetched_later():
+    """scores を読んだ後に生まれた解放イベントが、後続の取得で見えれば解決できること。"""
+    tables = _two_event_tables()
+
+    class _LaggingSource:
+        """scores を読んだ後に card_unlock_events へ1件増える取得口。"""
+
+        def table(self, name):
+            if name == "recommendation_scores":
+                extra = tables["recommendation_scores"].iloc[[0]].copy()
+                extra["id"] = ["score-late"]
+                extra["unlock_event_id"] = ["unlock-LATE"]
+                return pd.concat([tables["recommendation_scores"], extra], ignore_index=True)
+            if name == "card_unlock_events":
+                late = tables["card_unlock_events"].iloc[[0]].copy()
+                late["id"] = ["unlock-LATE"]
+                late["card_id"] = ["card-A"]
+                return pd.concat([tables["card_unlock_events"], late], ignore_index=True)
+            return tables[name]
+
+    out = rec_db.load_tables(_LaggingSource(), ("recommendation_scores",), event_id="evt-A")
+    assert set(out["recommendation_scores"]["id"]) == {"score-A", "score-late"}
+
+
 def test_scope_to_event_drops_scores_that_cannot_be_resolved():
     """解決できない行は除外側に倒れること（05 §3）。card_unlock_events と同じ扱い。"""
     tables = _two_event_tables()
