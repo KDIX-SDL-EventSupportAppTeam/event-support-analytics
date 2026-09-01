@@ -264,12 +264,66 @@ def attach_card_owner(df: pd.DataFrame, cards: pd.DataFrame, *, card_col: str = 
     return df.merge(lookup, on=card_col, how="left")
 
 
+def attach_scores_event_id(
+    df: pd.DataFrame, unlocks: pd.DataFrame, cards: pd.DataFrame,
+    *, key_col: str = "unlock_event_id",
+) -> pd.DataFrame:
+    """`recommendation_scores` に **`event_id` だけ**を付ける。
+
+    解決経路: `unlock_event_id` → `card_unlock_events.id` → `card_id`
+    → `bingo_cards.event_id`。
+
+    `attach_card_owner()` を流用しない: あれは `user_id` もマージするが、
+    `recommendation_scores` は**すでに `user_id` を持つ**ため素直に merge すると
+    `user_id_x` / `user_id_y` に割れて後続の `participants_only()` が壊れる。
+
+    **`event_id` を既に持つ入力には何もしない。** 同じ理由で merge すると
+    `event_id_x` / `event_id_y` に割れ、`scope_to_event()` が「`event_id` 列が無い表」
+    として素通しする（=イベントで絞られない、という issue #14 の失敗がそのまま戻る）。
+    `SqlSource` は `LIVE_TABLES` の列しか SELECT しないので起きないが、
+    ダンプ／合成データは CSV にある列をそのまま読む。
+
+    解決できない行（`unlock_event_id` が `card_unlock_events` に無い）は
+    `event_id` が NaN になり、**絞り込み時に除外される**。`card_unlock_events` の
+    `attach_card_owner()` 経路と同じ扱い（05 §3）。
+
+    **辿る先の表そのものが使えないとき（列欠け）も、全 NaN の `event_id` 列を付けて返す。**
+    列を付けずに返すと `scope_to_event()` が「`event_id` 列が無い表」として全件素通しし、
+    他イベントの行が黙って混ざる（issue #14 の症状そのもの）。行単位で除外側に倒すなら
+    表単位でも倒すのが筋であり、こうすると絞り込み結果が空になるので**画面で異常が見える**。
+    **例外は投げない。** 取得層の例外はその回の描画を丸ごと落とす（02 §4）。
+
+    空 DataFrame・`unlock_event_id` 列が無い入力は、そもそも解決の対象外なのでそのまま返す。
+    """
+    if df.empty or key_col not in df.columns:
+        return df
+    if "event_id" in df.columns:
+        return df
+    if not {"id", "card_id"} <= set(unlocks.columns):
+        return _unresolved_event_id(df)
+    if not {"id", "event_id"} <= set(cards.columns):
+        return _unresolved_event_id(df)
+    card_of_unlock = unlocks[["id", "card_id"]].rename(columns={"id": key_col})
+    event_of_card = cards[["id", "event_id"]].rename(columns={"id": "card_id"})
+    resolved = card_of_unlock.merge(event_of_card, on="card_id", how="left")[[key_col, "event_id"]]
+    return df.merge(resolved, on=key_col, how="left")
+
+
+def _unresolved_event_id(df: pd.DataFrame) -> pd.DataFrame:
+    """イベントを解決できなかった表に、全 NaN の `event_id` を付ける（絞り込みで落ちる）。
+
+    NaN は merge の未一致が生むものと同じ `float('nan')` にする。
+    """
+    return df.assign(event_id=float("nan"))
+
+
 def scope_to_event(tables: dict[str, pd.DataFrame], event_id: str | None) -> dict[str, pd.DataFrame]:
     """1イベントぶんに絞る。**絞り込み規則はここだけに書く**（ADR 0001）。
 
     `recommendation_scores` / `card_unlock_events` に `event_id` 列は無いため、
-    `card_unlock_events` → `bingo_cards` の JOIN（`attach_card_owner`）で得た
-    `event_id` を使う。
+    `card_unlock_events` → `bingo_cards` の JOIN で得た `event_id` を使う
+    （`card_unlock_events` は `attach_card_owner()`、`recommendation_scores` は
+    `attach_scores_event_id()`。どちらも `load_tables()` が適用済みで渡す）。
 
     **`users.event_id` では絞らない。** 出展者・運営アカウントが混ざるため
     （event-support-server `docs/reference/api-endpoints.md`）。
@@ -299,6 +353,24 @@ def participants_only(df: pd.DataFrame, users: pd.DataFrame, *, user_col: str = 
     return df[~df[user_col].isin(staff)].copy()
 
 
+#: 取得を**後回しにする**表と、その順序。**参照される側を後に読む。**
+#:
+#: 当日はテーブル間の取得に数秒のずれが出る（02 §4）。参照する側（scores）を先に、
+#: 参照される側（unlocks → cards）を後に読むと、後から読んだほうが新しいぶん、
+#: 先に読んだ行の参照先は必ず含まれる。逆順だと、その数秒に生まれた解放イベントを
+#: 指すスコアが解決できず、絞り込みで落ちる（05 §3「直近の推薦が数件欠けうる」）。
+#:
+#: `users` も同じ理由で最後に読む（新しいほど `participants_only()` が正しく効く）。
+#: `need` は set なので、明示的に並べないと反復順が実行ごとに変わる。
+_FETCH_LAST = ("card_unlock_events", "bingo_cards", "users")
+
+
+def _fetch_order(need: set[str]) -> list[str]:
+    """取得順。参照される側を後に回し、残りは名前順で決定的にする。"""
+    deferred = [n for n in _FETCH_LAST if n in need]
+    return sorted(need - set(deferred)) + deferred
+
+
 def load_tables(source: Source, names: tuple[str, ...] | None = None, *,
                 event_id: str | None = None, exclude_staff: bool = True) -> dict[str, pd.DataFrame]:
     """指標・画面が使う形までまとめて整えて返す。**取得の作法はここに集約する。**
@@ -311,16 +383,26 @@ def load_tables(source: Source, names: tuple[str, ...] | None = None, *,
     画面側はこれを呼ぶだけでよい。取得口（ダンプ／合成／プロキシ）は問わない。
     """
     names = names or tuple(LIVE_TABLES)
-    need = set(names) | ({"bingo_cards"} if set(names) & set(CARD_KEYED_TABLES) else set())
+    want = set(names)
+    need = set(want)
+    if want & set(CARD_KEYED_TABLES):
+        need |= {"bingo_cards"}
+    if "recommendation_scores" in want:
+        # scores は card_id を持たない。unlock_event_id → card_unlock_events →
+        # bingo_cards で event_id を解決するため、names に無くても両方を取る。
+        need |= {"card_unlock_events", "bingo_cards"}
     need |= {"users"} if exclude_staff else set()
 
-    tables = {n: source.table(n) for n in need}
+    tables = {n: source.table(n) for n in _fetch_order(need)}
 
     cards = tables.get("bingo_cards")
     if cards is not None:
         for name in CARD_KEYED_TABLES:
             if name in tables:
                 tables[name] = attach_card_owner(tables[name], cards)
+        if "recommendation_scores" in tables and "card_unlock_events" in tables:
+            tables["recommendation_scores"] = attach_scores_event_id(
+                tables["recommendation_scores"], tables["card_unlock_events"], cards)
 
     tables = scope_to_event(tables, event_id)
 

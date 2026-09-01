@@ -14,6 +14,7 @@
 | 02 | [data-source](02-data-source.md) | 今年のデータがどこに、どんな形であるか |
 | 03 | [live-dashboard](03-live-dashboard.md) | **当日の監視画面。** 信号機と対応行動 |
 | 04 | [post-analysis](04-post-analysis.md) | **事後の分析画面。** 問い1つに図1つ |
+| 05 | [exclusion-policy](05-exclusion-policy.md) | 出展者・運営スタッフを全集計から外す規則。server と揃える |
 
 ## 貫く原則
 
