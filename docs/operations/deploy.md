@@ -77,6 +77,9 @@ python src/run_pipeline.py
 
 ### 2. デプロイする
 
+> `main` へ push したときの自動デプロイ（CD）は [cd.md](cd.md) にある。
+> 手元からのこの手順は今後も使える（同じサービスを更新する）。
+
 ```bash
 bash deploy/deploy.sh --set-password
 ```
