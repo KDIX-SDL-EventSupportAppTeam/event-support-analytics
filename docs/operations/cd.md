@@ -21,6 +21,7 @@ git push origin main
 
 ## 初期設定
 
+**コマンドはすべて Git Bash で実行する**（PowerShell では変数の書き方とループが通らない）。
 一度だけ行う。`PROJECT`・`REGION`・`SERVICE` は `deploy/deploy.sh` の既定値に合わせている。
 
 ```bash
@@ -131,10 +132,20 @@ gcloud iam workload-identity-pools providers describe github-oidc --location glo
 無料枠に収まる規模だが、放っておくとイメージの保管だけが増え続ける。古い版を消す掃除を入れておく。
 
 ```bash
-gcloud artifacts repositories set-cleanup-policies cloud-run-source-deploy \
-  --location "${REGION}" --project "${PROJECT}" \
-  --policy=<(echo '[{"name":"keep-recent","action":{"type":"Keep"},"mostRecentVersions":{"keepCount":5}},{"name":"delete-old","action":{"type":"Delete"},"condition":{"olderThan":"30d"}}]')
+cat > /tmp/cleanup-policy.json <<'JSON'
+[
+  {"name": "keep-recent", "action": {"type": "Keep"}, "mostRecentVersions": {"keepCount": 5}},
+  {"name": "delete-old", "action": {"type": "Delete"}, "condition": {"olderThan": "30d"}}
+]
+JSON
 ```
+
+```bash
+gcloud artifacts repositories set-cleanup-policies cloud-run-source-deploy   --location "${REGION}" --project "${PROJECT}" --policy=/tmp/cleanup-policy.json
+```
+
+リポジトリ `cloud-run-source-deploy` は `gcloud run deploy --source` が初回に自動で作る。
+**先に一度デプロイしてからでないとこのコマンドは失敗する**ので、手順6のあとに回してもよい。
 
 | 何に | どう課金されるか |
 |---|---|
