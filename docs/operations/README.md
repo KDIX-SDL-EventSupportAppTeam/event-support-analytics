@@ -3,6 +3,7 @@
 | ファイル | 内容 |
 |---|---|
 | [deploy.md](deploy.md) | Cloud Run への公開と共有手順・**実行コマンド一式** |
+| [cd.md](cd.md) | `main` への push で自動デプロイする仕組みと初期設定・課金の目安 |
 | [troubleshooting.md](troubleshooting.md) | 停止時の不具合レポートと対応 |
 
 ## よく使うコマンド
