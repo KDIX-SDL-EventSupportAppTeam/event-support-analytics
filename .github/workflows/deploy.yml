@@ -1,0 +1,82 @@
+# main への push で Cloud Run へデプロイする（CD）。
+#
+# 手元の deploy/deploy.sh と同じサービスを、同じ設定で更新する。
+# 違いは2点だけ:
+#   1. 合言葉は触らない。Secret Manager の既存バージョン（:latest）を参照するだけ
+#   2. data/tables/*.csv は Git に無いので、非公開の GCS バケットから取得して
+#      ビルドコンテキストに入れる（Firestore へは接続しない）
+#
+# 初期設定（WIF・バケット・変数）は docs/operations/cd.md を読むこと。
+name: Cloud Run へデプロイ
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 同時実行を1本に絞る。連続 push でデプロイが競合しないようにする
+concurrency:
+  group: deploy-cloud-run
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write   # Workload Identity 連携に必要
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      PROJECT: ${{ vars.GCP_PROJECT }}
+      REGION: ${{ vars.GCP_REGION }}
+      SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+      SECRET: ${{ vars.DASHBOARD_SECRET }}
+      TABLES_URI: ${{ vars.TABLES_GCS_URI }}
+      SUPPORT_CONTACT: ${{ vars.SUPPORT_CONTACT }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: GCP へ認証（Workload Identity 連携）
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOY_SA }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: 中間テーブルを取得する
+        # data/ は .gitignore 済みなのでリポジトリには無い。
+        # 非公開バケットに置いた CSV を落として、イメージに焼く分だけ用意する。
+        run: |
+          mkdir -p data/tables
+          gcloud storage cp "${TABLES_URI%/}/*.csv" data/tables/
+          test -f data/tables/participants.csv \
+            || { echo "participants.csv が取得できていません: ${TABLES_URI}" >&2; exit 1; }
+          ls -l data/tables
+
+      - name: デプロイする
+        # --allow-unauthenticated は「GCP の認証を求めない」という意味であり、
+        # アクセス制御は画面側の合言葉（src/auth.py）が担う。
+        # 合言葉そのものは CI では作らない（Secret Manager の既存バージョンを参照）。
+        run: |
+          gcloud run deploy "${SERVICE}" \
+            --source . \
+            --project "${PROJECT}" \
+            --region "${REGION}" \
+            --allow-unauthenticated \
+            --port 8080 \
+            --memory 1Gi \
+            --cpu 1 \
+            --min-instances 0 \
+            --max-instances 3 \
+            --session-affinity \
+            --set-secrets "DASHBOARD_PASSWORD=${SECRET}:latest" \
+            --set-env-vars "DASHBOARD_AUTH_REQUIRED=1,SUPPORT_CONTACT=${SUPPORT_CONTACT:-この画面を共有した担当者}"
+
+      - name: URL を出す
+        run: |
+          echo "URL: $(gcloud run services describe "${SERVICE}" \
+            --region "${REGION}" --project "${PROJECT}" --format='value(status.url)')" \
+            >> "$GITHUB_STEP_SUMMARY"

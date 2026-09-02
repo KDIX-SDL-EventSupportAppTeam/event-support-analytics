@@ -1,12 +1,32 @@
-# 利用者から不具合レポートが届いたら
+# 不具合レポートが届いたら
 
-運営メンバー（非エンジニア）が画面で受け取るのは、次の3種類のうちどれかである。
+利用者が画面で受け取るのは、次の3種類のうちどれかである。
 
 | 画面 | 出る条件 | 実装 |
 |---|---|---|
 | 🛑 画面を表示できませんでした | 想定外の例外で処理が止まった | `report.guarded()` |
 | 📭 表示するデータがありません | 中間テーブルが読めない | `report.show_data_missing_screen()` |
 | ❓ 表示がおかしいときは（サイドバー） | 利用者の自己申告。常時ある | `dashboard.main()` |
+
+**この仕組みは当初、運営メンバー（非エンジニア）が自力で状況を伝えられるように
+作られたものである。** 2026-08-31 に読み手はエンジニアへ切り替わったので、
+レポートを待たずに直接 Cloud Logging を見たほうが速い場面が増えている。
+それでも「レポート番号」と「そのとき選んでいた条件」は再現の手がかりとして有効なので、
+仕組み自体は残している。
+
+## どの画面に効くか
+
+3画面すべてに効く。統合アプリでは `src/app.py` が各画面の `main` を
+`report.guarded()` で包み、単体起動では各ファイルの `__main__` が同じことをする。
+
+| 画面 | エントリ |
+|---|---|
+| 📊 去年の行動データ | `dashboard.main` |
+| 🚦 推薦の当日監視 | `live_dashboard.main` |
+| 📈 推薦の事後分析 | `post_analysis.main` |
+
+ただし**「❓ 表示がおかしいときは」のサイドバー項目は `dashboard.py` にしかない。**
+推薦の2画面で異常に気づいた場合、自己申告の導線は無いので Cloud Logging を見る。
 
 いずれも**同じ書式のテキスト**を提示し、「コピーして担当者に送ってください」と案内する。
 ファイル保存ボタン（メール添付用）も付く。
@@ -29,7 +49,12 @@
 
 1. スタックトレースの最下段を読む。多くは `data/tables/*.csv` の不整合か、
    絞り込み結果が空になったことによる `KeyError` / `ValueError`
-2. 「そのとき選んでいた条件」を手元で再現する（同じ絞り込みを入れて `streamlit run`）
+2. 「そのとき選んでいた条件」を手元で再現する
+
+   ```bash
+   streamlit run src/app.py
+   ```
+
 3. サーバー側のログも見る。トレースは stderr にも出しているので Cloud Logging に残る
 
 ```bash
@@ -49,6 +74,10 @@ gcloud run services logs read protofes-dashboard --region asia-northeast1 --proj
 | 「Error: Server Connection Error」 | 同上 | 同上 |
 | Google のエラーページが出る（503 等） | コンテナが起動していない／落ちた | Cloud Logging を見る。`gcloud run services logs read` |
 | 合言葉の画面が出ずエラーになる | Secret Manager の紐づけ漏れ | `bash deploy/deploy.sh --set-password` で再設定 |
+| 当日監視の数字が更新されなくなる | メニューで別の画面へ移った | 自動更新は表示中の画面でのみ動く。当日は開いたままにする |
 
-**利用者への案内は「まず再読み込み、直らなければサイドバーの内容を送る」の2つだけでよい。**
-それ以外は覚えてもらう必要がない。
+いずれも Cloud Logging を先に見る。
+
+```bash
+gcloud run services logs read protofes-dashboard --region asia-northeast1 --project event-support-app --limit 50
+```

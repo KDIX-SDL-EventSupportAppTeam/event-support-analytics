@@ -45,10 +45,25 @@
 
 判断基準の詳細は [判断基準](specs/analytics-pipeline/01-context/decision-criteria.md) を参照。
 
+## 守備範囲の拡張（2026年）
+
+当初このリポジトリは **去年（2025年）のデータの分析だけ** を担当していた。
+2026年 第4回プロトフェスに向けて、**今年のデータを扱う** 役割が加わった。
+
+| 対象 | 仕様 | 何をするか |
+|---|---|---|
+| 去年（2025年）のデータ | [specs/analytics-pipeline/](specs/analytics-pipeline/README.md) | 抽出・整形・分析・可視化（上記1〜4） |
+| 今年（2026年）の推薦の評価 | [specs/recommendation-evaluation/](specs/recommendation-evaluation/README.md) | 当日は推薦が壊れていないかを監視し、事後は研究として分析する |
+
+去年データの価値は変わらない。今年の分析でも、周遊促進（Q1）の比較基準・
+事前シミュレーションの入力・先行研究の限界の提示に去年データを使う。
+ただし **去年データを今年の対照群にはしない**（仕組みが変わりすぎている。
+詳細は [recommendation-evaluation/01-context.md](specs/recommendation-evaluation/01-context.md) §3）。
+
 ## ドキュメントの構成
 
-仕様は `docs/specs/analytics-pipeline/` 以下に意味単位で分割されている。
-全体像と読む順序は [specs/analytics-pipeline/README.md](specs/analytics-pipeline/README.md) を参照。
+仕様は `docs/specs/` 以下に意味単位で分割されている。
+全体像と読む順序は [specs/README.md](specs/README.md) を参照。
 
 ## 重要な前提の変更（必読）
 
