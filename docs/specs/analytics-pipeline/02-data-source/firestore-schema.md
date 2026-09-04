@@ -1,3 +1,8 @@
+---
+状態: 実装済み
+最終更新: 2026-09-02
+---
+
 # Firestore スキーマ
 
 去年のアプリ（`HidetsuguSuto/2025_P3_supporters_game`）が使用していたデータ構造。
