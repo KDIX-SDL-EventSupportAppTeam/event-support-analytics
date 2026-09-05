@@ -65,6 +65,9 @@ URL で共有する手順（Cloud Run + 合言葉）は [docs/operations/deploy.
 python src/build_tables.py data/raw/dump_YYYYMMDD_HHMMSS.json --show-staff-candidates
 ```
 
+`run_pipeline.py` に `--exclude-pids` を渡すと、除外した pid・件数は `output/extraction_stats.json`
+（既定パス。`--stats-out` で変更可）に記録される。
+
 ### 今年（2026年）の推薦の評価
 
 仕様は [docs/specs/recommendation-evaluation/](docs/specs/recommendation-evaluation/)。

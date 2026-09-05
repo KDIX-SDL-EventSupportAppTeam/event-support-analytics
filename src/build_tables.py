@@ -234,6 +234,22 @@ def detect_staff_candidates(
     return pd.DataFrame(rows)
 
 
+def apply_staff_exclusion(visits: pd.DataFrame, exclude_pids: list[str], stats: dict) -> pd.DataFrame:
+    """規則2で目視確定した pid を visits から外し、**件数と pid を stats に残す**。
+
+    記録が無いと、後から「何を除外して出した数字か」が辿れない（FINDINGS 付記の事故）。
+    """
+    pids = sorted({p.strip() for p in exclude_pids if p and p.strip()})
+    stats["excluded_pids"] = pids
+    stats["excluded_staff_users"] = len(pids)
+    if not pids:
+        stats["visits_after_staff_exclusion_users"] = int(visits["pid"].nunique())
+        return visits
+    kept = visits[~visits["pid"].isin(pids)]
+    stats["visits_after_staff_exclusion_users"] = int(kept["pid"].nunique())
+    return kept
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dump_path", help="data/raw/dump_*.json へのパス")
@@ -264,11 +280,9 @@ def main() -> None:
         print(candidates.to_string(index=False) if not candidates.empty else "候補なし")
         return
 
+    before = visits["pid"].nunique()
+    visits = apply_staff_exclusion(visits, args.exclude_pids, stats)
     if args.exclude_pids:
-        before = visits["pid"].nunique()
-        visits = visits[~visits["pid"].isin(args.exclude_pids)]
-        stats["excluded_staff_users"] = len(args.exclude_pids)
-        stats["visits_after_staff_exclusion_users"] = visits["pid"].nunique()
         print(f"excluded {before - visits['pid'].nunique()} staff/exhibitor users")
 
     participants = build_participants(raw, visits)

@@ -3,7 +3,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import pandas as pd  # noqa: E402
+
 from build_tables import (  # noqa: E402
+    apply_staff_exclusion,
     build_booths,
     build_participants,
     build_visits,
@@ -92,3 +95,19 @@ def test_staff_candidate_detection_flags_pre_open_checkin():
 
     candidates = detect_staff_candidates(visits, booths, open_hour_jst=9)
     assert "u0002" in set(candidates["pid"])
+
+
+def test_apply_staff_exclusion_records_pids_and_counts():
+    visits = pd.DataFrame({"pid": ["u0001", "u0001", "u0002", "u0003"], "booth_id": ["b1", "b2", "b1", "b1"]})
+    stats: dict = {}
+    kept = apply_staff_exclusion(visits, ["u0002", " u0002 "], stats)
+    assert set(kept["pid"]) == {"u0001", "u0003"}
+    assert stats == {"excluded_pids": ["u0002"], "excluded_staff_users": 1,
+                     "visits_after_staff_exclusion_users": 2}
+
+
+def test_apply_staff_exclusion_without_pids_changes_nothing_but_still_records():
+    visits = pd.DataFrame({"pid": ["u0001", "u0002"], "booth_id": ["b1", "b1"]})
+    stats: dict = {}
+    assert apply_staff_exclusion(visits, [], stats).equals(visits)
+    assert stats["excluded_pids"] == [] and stats["excluded_staff_users"] == 0
