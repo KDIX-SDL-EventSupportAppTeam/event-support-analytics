@@ -418,8 +418,9 @@ def load_tables(source: Source, names: tuple[str, ...] | None = None, *,
 #: `/ops/state` の取得結果の区別（03「/ops/state が取れないとき」）。
 #: **「トークンの設定漏れ」と「推薦エンジンが落ちている」を画面上で区別するため**にある。
 OPS_OK = "ok"
-OPS_AUTH_ERROR = "auth"          # 401 / 403。こちらの設定の問題
-OPS_UNAVAILABLE = "unavailable"  # 接続失敗・タイムアウト・404・5xx。向こうの問題
+OPS_AUTH_ERROR = "auth"            # 401 / 403。こちらの設定の問題
+OPS_TOKEN_MISSING = "token_missing"  # RECOMMEND_OPS_TOKEN が空。リクエストしない（issue #18 T-2）
+OPS_UNAVAILABLE = "unavailable"    # 接続失敗・タイムアウト・404・5xx。向こうの問題
 
 
 class OpsStateResult(NamedTuple):
@@ -435,6 +436,7 @@ class OpsStateClient:
     本番の `/ops/*` は `OPS_TOKEN` による認証が必須である（推薦側 ADR 0008）。
     **未設定なら 404、設定済みでトークン無しなら 401** になるため、
     トークンを送らないと画面が恒久的に「取得不能」になる。
+    **トークンが空のときはリクエストせず `OPS_TOKEN_MISSING` を返す**（401 と区別する。issue #18 T-2）。
 
     ヘッダは **`X-Ops-Token` を使う。`Authorization` は使わない。**
     Cloud Run のプラットフォーム認証（IAM の ID トークン）が `Authorization` を使うので、
@@ -470,9 +472,12 @@ class OpsStateClient:
         """
         if not self.base_url:
             return OpsStateResult(None, OPS_UNAVAILABLE)
+        if not self._token:
+            # 未設定でヘッダ無しのまま叩くと 401 が返り「誤り」と区別できない。叩かずに返す。
+            return OpsStateResult(None, OPS_TOKEN_MISSING)
         url = f"{self.base_url}/ops/state"
         # トークンは**ヘッダにだけ載せる**。URL のクエリにも画面にも出さない。
-        headers = {self.TOKEN_HEADER: self._token} if self._token else {}
+        headers = {self.TOKEN_HEADER: self._token}
         req = urllib.request.Request(url, headers=headers, method="GET")
         try:
             with urllib.request.urlopen(req, timeout=self.timeout_sec) as resp:  # noqa: S310
