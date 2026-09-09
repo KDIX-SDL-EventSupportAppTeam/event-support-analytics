@@ -159,6 +159,8 @@ def ops_state(recommender_dead: bool) -> dict:
                   "quality_gate_passed": not dead,
                   "gate_detail": {"size": not dead, "rules": not dead, "gamma": not dead, "coverage": not dead}},
         "experiment": {"split_active": not dead, "split_started_at": None},
+        "latency_ms": {"p50": 38, "p95": 900 if dead else 112, "budget": 600},
+        "requests": {"last_30min": 0 if dead else 214, "errors_last_30min": 214 if dead else 0},
         "notes": [],
     }
 

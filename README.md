@@ -18,6 +18,9 @@
 ```bash
 pip install -r requirements.txt
 
+# 0. 環境変数（任意）。.env.example をコピーして値を埋める（.env は .gitignore 済み）
+cp .env.example .env
+
 # 1. 抽出（Firestoreへは一度だけ接続。ADC認証が必要）
 python src/dump_firestore.py
 
@@ -87,6 +90,11 @@ streamlit run src/live_dashboard.py
 streamlit run src/post_analysis.py
 ```
 
+- `/ops/state`（推薦エンジン）を読むには `RECOMMEND_BASE_URL` と `RECOMMEND_OPS_TOKEN` を設定する
+  （推薦側 `OPS_TOKEN` と同一の秘密。ヘッダは `X-Ops-Token`。推薦側 ADR 0008）。
+  未設定でも当日監視は動く（`/ops/state` 由来の欄だけ「未設定」表示になる。仕様 03）。
+  事後分析は当日取得した `ops_state.json` をダンプディレクトリに置くと「⑧ エンジン状態」タブで
+  `gate_detail` / `decision_table_size` / `built_at` を参照できる（issue #18）
 - 算出式は `src/live_metrics.py` / `src/post_eval_metrics.py` にだけ書く（二重管理しない）
 - 当日画面は **A/B の効果（群別訪問率・その差）を表示しない**（仕様 03 §5）
 - `interest_match` は凍結値を使い再計算しない（仕様 04 §4）

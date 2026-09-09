@@ -133,3 +133,46 @@ def test_visit_rate_by_decision_table_band(tables):
         tables["recommendation_scores"], tables["check_ins"], tables["card_unlock_events"])
     assert {"band", "visit_rate", "n"} <= set(out.columns)
     assert (out["visit_rate"].dropna().between(0, 1)).all()
+
+
+# --- 図⑧ エンジン状態（/ops/state の凍結値）（issue #18）--------------------
+
+
+def test_ops_state_summary_none_is_not_zero_filled():
+    """取れていないときは available=False。0/空で埋めない（issue #18「起きてはいけないこと」）。"""
+    s = pem.ops_state_summary(None)
+    assert s["available"] is False
+    assert "decision_table_size" not in s and "gate_detail" not in s
+
+
+def test_ops_state_summary_exposes_gate_detail_individually():
+    """T-9: gate_detail の4項目を個別に読める。まとめて1つの真偽値にしない。"""
+    payload = {
+        "snapshot": {"decision_table_size": 214, "built_at": "2026-10-16T04:35:00Z"},
+        "rules": {"built_at": "2026-10-16T04:35:00Z", "gamma": 0.4,
+                  "count_certain_up": 1, "count_certain_down": 0, "candidate_coverage": 0.3},
+        "phase": {"current": "SIMILARITY", "judged": "SIMILARITY", "quality_gate_passed": False,
+                  "gate_detail": {"size": True, "rules": False, "gamma": False, "coverage": True}},
+    }
+    s = pem.ops_state_summary(payload)
+    assert s["available"] is True
+    assert s["gate_detail"] == {"size": True, "rules": False, "gamma": False, "coverage": True}
+    assert set(s["gate_failed_items"]) == {"rules", "gamma"}
+    assert s["decision_table_size"] == 214
+    assert s["snapshot_built_at"] == "2026-10-16T04:35:00Z"
+    assert "確実規則" in s["gate_reason"] and "γ" in s["gate_reason"]
+
+
+def test_ops_state_summary_distinguishes_null_gate_from_failure():
+    """推薦を1件も処理していない（gate_detail が全 null）を『落ちた』と読まない（02 §2）。"""
+    payload = {"snapshot": {"decision_table_size": 12},
+               "phase": {"current": "COVERAGE", "quality_gate_passed": None, "gate_detail": None}}
+    s = pem.ops_state_summary(payload)
+    assert s["gate_failed_items"] == []
+    assert "1件も" in s["gate_reason"]
+
+
+def test_ops_state_summary_reads_synth_shape():
+    s = pem.ops_state_summary(synth.ops_state(recommender_dead=False))
+    assert s["available"] and s["gate_detail"]["size"] is True
+    assert s["latency_p95_ms"] == 112  # 入れ子 latency_ms.p95 を読めている

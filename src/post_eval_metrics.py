@@ -17,6 +17,8 @@ import json
 import numpy as np
 import pandas as pd
 
+import live_metrics  # noqa: E402  -- `/ops/state` の正規化を二重に持たない（03/04 共通の入れ子→フラット変換）
+
 HIGH_RATING_DEFAULT = 4  # 「高評価」の凍結定義。星4段階で 4 以上（04 §0「事前に凍結する」）
 FUNNEL_MATCH_ORDER = ["MATCH", "PARTIAL", "MISMATCH", "UNKNOWN"]
 POWER_CAVEAT = "各群 600〜700枠・訪問は各群100件前後。検出できるのは 8ポイント程度の差まで。" \
@@ -250,6 +252,65 @@ def _format_rule(rule: dict) -> str:
     head = " かつ ".join(parts) if parts else "（条件なし）"
     tail = "評価 >= HIGH" if rule.get("direction") == "up" else "評価 <= LOW"
     return f"if {head} then {tail}"
+
+
+# --- 図⑧ エンジン状態（/ops/state の凍結値）（issue #18 / #11）----------
+
+#: `/ops/state` の `gate_detail` の4項目。**まとめて1つの真偽値にしない**（issue #18 T-9）。
+GATE_ITEMS = ("size", "rules", "gamma", "coverage")
+
+
+def ops_state_summary(ops_state: dict | None) -> dict:
+    """事後分析が参照する `/ops/state` 由来の値。
+
+    当日の JSONL ログ／DB からは取れず `/ops/state` からしか取れないもの（issue #18）:
+
+    - `gate_detail`（`size` / `rules` / `gamma` / `coverage` を**個別に**）
+      — 「なぜ DRSA に上がらなかったか」の答え。来年の `PHASE_DRSA_MIN`・品質ゲート見直しの根拠
+    - `decision_table_size` — 決定表が実際に何件まで育ったか
+    - `snapshot_built_at` — 最後に取り込めた時刻
+
+    取得できていない（`ops_state` が None）ときは `available=False` を返し、
+    **0 や空値で埋めない**（「フェーズが上がらなかった」のか「取れていない」のかを区別する。
+    issue #18「起きてはいけないこと」）。
+    """
+    norm = live_metrics.normalize_ops_state(ops_state)
+    if norm is None:
+        return {"available": False, "note": "`/ops/state` を取得できていない。"
+                "『DRSA に上がらなかった』と『状態が取れていない』は区別すること（issue #18）。"}
+    gate = norm.get("gate_detail") or {}
+    gate_by_item = {k: gate.get(k) for k in GATE_ITEMS}
+    failed = [k for k, v in gate_by_item.items() if v is False]
+    passed = norm.get("quality_gate_passed")
+    return {
+        "available": True,
+        "phase_current": norm.get("phase_current"),
+        "phase_judged": norm.get("phase_judged"),
+        "quality_gate_passed": passed,
+        "gate_detail": gate_by_item,
+        "gate_failed_items": failed,
+        "gate_reason": _gate_reason(passed, failed, gate_by_item),
+        "decision_table_size": norm.get("decision_table_size"),
+        "snapshot_built_at": norm.get("snapshot_built_at"),
+        "rules_built_at": norm.get("rules_built_at"),
+        "gamma": norm.get("gamma"),
+        "n_certain_rules": norm.get("n_certain_rules"),
+        "rule_coverage": norm.get("rule_coverage"),
+        "latency_p95_ms": norm.get("latency_p95_ms"),
+    }
+
+
+def _gate_reason(passed, failed: list[str], gate_by_item: dict) -> str:
+    if passed:
+        return "品質ゲート通過。DRSA が発火した。"
+    if all(v is None for v in gate_by_item.values()):
+        return "本番推薦を1件も処理していないため gate_detail が未提供（null）。0/false で埋めない。"
+    if failed:
+        label = {"size": "決定表件数", "rules": "確実規則の本数", "gamma": "近似の質 γ",
+                 "coverage": "規則の被覆率"}
+        return "品質ゲート未通過。落ちた項目: " + "、".join(label.get(k, k) for k in failed) \
+            + "（この項目が来年の見直し対象）。"
+    return "品質ゲート未通過（落ちた項目の内訳は gate_detail 参照）。"
 
 
 # --- 図⑦ 個票ビュー（1人の物語）（04 §6）------------------------------

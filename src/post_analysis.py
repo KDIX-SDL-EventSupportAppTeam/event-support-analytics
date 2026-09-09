@@ -60,6 +60,22 @@ def load_rules(source_dir: str) -> list[dict]:
     return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
 
 
+@st.cache_data
+def load_ops_state(source_dir: str) -> dict | None:
+    """`/ops/state` の凍結スナップショット（`ops_state.json`）。
+
+    事後分析は本番プロキシを待たない（02 §4）。イベント当日に取得したものを
+    ダンプと同じディレクトリに置いておく。無ければ None（`available=False` 表示になる）。
+    """
+    p = Path(source_dir) / "ops_state.json"
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return None
+
+
 def fig1_ecdf(t: dict) -> None:
     st.subheader("① 周遊は促進されたか（Q1）— 訪問ブース数の ECDF")
     st.caption("この図はアプリ全体の効果を示す。推薦アルゴリズムの効果とは別軸（04 §2）。"
@@ -145,6 +161,32 @@ def fig6_assigned(t: dict) -> None:
              f"{'✅ OK' if out['sanity_ok'] else '⚠️ 要確認'}")
 
 
+def fig8_engine_state(ops_state: dict | None) -> None:
+    st.subheader("⑧ エンジン状態 — /ops/state の凍結値（issue #18）")
+    st.caption("当日の JSONL ログ・DB からは取れず、`/ops/state` からしか取れない値。"
+               "**『DRSA に上がらなかった』と『状態が取れていない』を区別する**（0/空で埋めない）。")
+    s = pem.ops_state_summary(ops_state)
+    if not s["available"]:
+        st.warning(s["note"] + "\n\n当日取得した `ops_state.json` をダンプディレクトリに置くと表示されます。")
+        return
+    c1, c2, c3 = st.columns(3)
+    c1.metric("現在フェーズ", s["phase_current"] or "—", help="phase.current")
+    c2.metric("決定表件数", s["decision_table_size"] if s["decision_table_size"] is not None else "未提供",
+              help="snapshot.decision_table_size。決定表が実際に何件まで育ったか")
+    c3.metric("γ / 確実規則", f"{s['gamma']} / {s['n_certain_rules']}本")
+    st.write(f"**最後の取り込み時刻（built_at）**: snapshot `{s['snapshot_built_at'] or '—'}` / "
+             f"rules `{s['rules_built_at'] or '—'}`")
+    st.write(f"**品質ゲート**: {s['gate_reason']}")
+    gate_df = pd.DataFrame(
+        [{"項目": k, "結果": "○" if v is True else "×" if v is False else "未提供(null)"}
+         for k, v in s["gate_detail"].items()])
+    st.dataframe(gate_df, hide_index=True)
+    st.caption("gate_detail の4項目は個別に読む（issue #11 の『別の値ならどうだったか』の起点）。"
+               "推薦を1件も処理していなければ null。**null を 0/false に丸めない**（02 §2）。")
+    st.write(f"応答時間 p95: **{s['latency_p95_ms'] if s['latency_p95_ms'] is not None else '未提供'}** ms / "
+             f"規則の被覆率: **{s['rule_coverage'] if s['rule_coverage'] is not None else '未提供'}**")
+
+
 def fig7_timeline(t: dict) -> None:
     st.subheader("⑦ 個票ビュー（1人の物語）")
     st.caption("仮名 ID のまま。実名・メールは扱わない。特定されうる属性の組み合わせと併用しない（04 §6）。")
@@ -173,10 +215,13 @@ def main() -> None:
         st.error(f"{exc}\n\n`python src/synth_rec_data.py --out {source_dir}` で合成データを作れます。")
         return
     rules = load_rules(source_dir)
+    ops_state = load_ops_state(source_dir)
 
-    tabs = st.tabs(["① 周遊 ", "② DRSA ", "③ セレンディピティ", "④ データ量", "⑤ 規則", "⑥ 未割当", "⑦ 個票"])
+    tabs = st.tabs(["① 周遊 ", "② DRSA ", "③ セレンディピティ", "④ データ量", "⑤ 規則", "⑥ 未割当",
+                    "⑦ 個票", "⑧ エンジン状態"])
     for tab, fn in zip(tabs, [fig1_ecdf, fig2_within_diff, fig3_funnel, fig4_bands,
-                              lambda tt: fig5_rules(tt, rules), fig6_assigned, fig7_timeline]):
+                              lambda tt: fig5_rules(tt, rules), fig6_assigned, fig7_timeline,
+                              lambda _tt: fig8_engine_state(ops_state)]):
         with tab:
             fn(t)
 
