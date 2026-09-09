@@ -175,6 +175,9 @@ def render(source_kind: str, source_dir: str, ops_url: str) -> None:
         st.error(f"{exc}\n\n{REFRESH_SEC}秒後に再試行します。")
         return
     ops, ops_status = load_ops_state(source_dir, ops_url)
+    if ops_status == rec_db.OPS_OK:
+        st.session_state["_ops_last_good"] = {"state": ops, "at": now}
+    last_good = st.session_state.get("_ops_last_good")
 
     st.caption(f"最終更新 {to_jst(now):%H:%M:%S} JST　/　{REFRESH_SEC}秒ごとに自動更新"
                f"　/　データ源: {source_label(source_kind, source_dir)}")
@@ -188,6 +191,10 @@ def render(source_kind: str, source_dir: str, ops_url: str) -> None:
         st.error(f"`/ops/state` が認証エラー（401/403）です。`{rec_db.OpsStateClient.TOKEN_ENV}` を確認してください"
                  "（推薦サービスの `OPS_TOKEN` と同じ値）。**推薦エンジン自体は動いている可能性が高い。**"
                  "該当項目以外は動かし続けます（02 §1）。")
+    elif ops_status == rec_db.OPS_TOKEN_MISSING:
+        st.error(f"`{rec_db.OpsStateClient.TOKEN_ENV}` が未設定のため `/ops/state` を取得していません。"
+                 "推薦サービスの `OPS_TOKEN` と同じ値を Cloud Run の env（Secret Manager 経由）に設定してください。"
+                 "他の項目は動かし続けます。")
     elif ops is None:
         st.info("`/ops/state` を取得できていません（接続失敗・タイムアウト・5xx）。"
                 "該当項目は「取得不能」で表示し、他は動かし続けます（02 §1）。")
@@ -196,6 +203,17 @@ def render(source_kind: str, source_dir: str, ops_url: str) -> None:
     for i, sig in enumerate(board):
         with cols[i % 2]:
             signal_card(sig)
+
+    if ops is None and last_good:
+        st.caption(f"直近の正常値（{to_jst(last_good['at']):%H:%M:%S} JST 取得）")
+        prev = lm.normalize_ops_state(last_good["state"])
+        st.dataframe(pd.DataFrame([{
+            "phase_current": prev.get("phase_current"),
+            "decision_table_size": prev.get("decision_table_size"),
+            "gamma": prev.get("gamma"),
+            "n_certain_rules": prev.get("n_certain_rules"),
+            "rule_coverage": prev.get("rule_coverage"),
+        }]), hide_index=True)
 
     st.divider()
     st.markdown("### 当日の時系列（1枚に重ねる・横軸 JST）")

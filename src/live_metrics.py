@@ -26,6 +26,10 @@ GREEN, YELLOW, RED, UNKNOWN = "green", "yellow", "red", "unknown"
 #: 取得層（HTTP・環境変数）へ依存させない。一致は tests/test_live_metrics.py が固定する。
 OPS_AUTH_ERROR = "auth"
 
+#: base URL はあるが `RECOMMEND_OPS_TOKEN` が空。リクエストしていない。
+#: **`rec_db.OPS_TOKEN_MISSING` と同じ文字列であること。**
+OPS_TOKEN_MISSING = "token_missing"
+
 #: 認証トークンの環境変数名。表示に使うだけ。同じく `rec_db` と一致していること。
 TOKEN_ENV = "RECOMMEND_OPS_TOKEN"
 
@@ -145,6 +149,37 @@ def recent_unlock_count(unlock_events: pd.DataFrame, now: pd.Timestamp, window_m
     )
 
 
+def normalize_ops_state(payload: dict | None) -> dict | None:
+    """推薦エンジンの `/ops/state`（入れ子）と合成データ（フラット）を同じ形にそろえる。
+
+    無いキーは None にする。**0 や空文字で埋めない**（「取れていない」と「0」を区別する）。
+    """
+    if not isinstance(payload, dict):
+        return None
+    rules = payload.get("rules") if isinstance(payload.get("rules"), dict) else {}
+    snap = payload.get("snapshot") if isinstance(payload.get("snapshot"), dict) else {}
+    phase = payload.get("phase") if isinstance(payload.get("phase"), dict) else {}
+    up, down = rules.get("count_certain_up"), rules.get("count_certain_down")
+    n_certain = payload.get("n_certain_rules")
+    if n_certain is None and (up is not None or down is not None):
+        n_certain = int(up or 0) + int(down or 0)
+    gate = phase.get("gate_detail")
+    return {
+        "gamma": payload.get("gamma", rules.get("gamma")),
+        "n_certain_rules": n_certain,
+        "rule_coverage": payload.get("rule_coverage", rules.get("candidate_coverage")),
+        "latency_p95_ms": payload.get("latency_p95_ms"),
+        "phase_current": phase.get("current"),
+        "phase_judged": phase.get("judged"),
+        "quality_gate_passed": phase.get("quality_gate_passed"),
+        "gate_detail": {k: gate.get(k) for k in ("size", "rules", "gamma", "coverage")}
+        if isinstance(gate, dict) else None,
+        "decision_table_size": snap.get("decision_table_size"),
+        "snapshot_built_at": snap.get("built_at"),
+        "rules_built_at": rules.get("built_at"),
+    }
+
+
 def ops_state_signals(ops_state: dict | None, status: str | None = None) -> list[Signal]:
     """`/ops/state` 由来の項目（γ・規則本数・被覆率・応答時間）。
 
@@ -157,12 +192,15 @@ def ops_state_signals(ops_state: dict | None, status: str | None = None) -> list
     """
     if ops_state is None:
         auth = status == OPS_AUTH_ERROR
-        na = "認証エラー" if auth else "取得不能"
-        detail = (f"{na}（{TOKEN_ENV} を確認）" if auth else na)
+        missing = status == OPS_TOKEN_MISSING
+        na = "認証エラー" if auth else "未設定" if missing else "取得不能"
+        detail = (f"{na}（{TOKEN_ENV} を確認）" if (auth or missing) else na)
         first_action = (
             f"{TOKEN_ENV} が未設定か誤っている。"
             "推薦サービスの OPS_TOKEN と同じ値を設定する（エンジン自体は生きている可能性が高い）"
             if auth else
+            f"{TOKEN_ENV} が未設定。推薦サービスの OPS_TOKEN と同じ値を Cloud Run の env に設定する"
+            if missing else
             "/ops/state 取得失敗そのものが、フォールバック率と併せて障害のサイン。品質ゲートは下げない"
         )
         rest_action = (
@@ -175,6 +213,7 @@ def ops_state_signals(ops_state: dict | None, status: str | None = None) -> list
             Signal("latency_p95", "応答時間 p95", na, UNKNOWN, detail,
                    f"{rest_action}、600ms 未満か確認する"),
         ]
+    ops_state = normalize_ops_state(ops_state)
     gamma = ops_state.get("gamma")
     n_certain = ops_state.get("n_certain_rules")
     coverage = ops_state.get("rule_coverage")
@@ -183,26 +222,57 @@ def ops_state_signals(ops_state: dict | None, status: str | None = None) -> list
     gamma_level = _level(gamma, 0.5, 0.0, higher_is_worse=False)
     if n_certain is not None and n_certain <= 1:
         gamma_level = RED
+    if p95 is None:
+        latency_signal = Signal("latency_p95", "応答時間 p95", "未提供", UNKNOWN,
+                                "/ops/state に latency_p95_ms が無い",
+                                "推薦側の応答に無い項目。Cloud Run のメトリクスで見る")
+    else:
+        latency_signal = Signal("latency_p95", "応答時間 p95", p95, _level(p95, 400, 600, higher_is_worse=True),
+                                f"p95 {p95}ms", "タイムアウト（1000ms）が近い。推薦エンジンの負荷を見る")
     return [
         Signal("drsa_quality", "DRSA 品質（γ・確実規則）", gamma, gamma_level,
                f"γ={gamma} / 確実規則 {n_certain}本",
                "品質ゲートが正しく止めているか確認する。しきい値を下げない"),
         Signal("rule_coverage", "規則の被覆率", coverage, _level(coverage, 0.5, 0.3, higher_is_worse=False),
                f"被覆率 {coverage}", "大半の候補が判断保留（score=0.5）になっている可能性。規則生成側を見る"),
-        Signal("latency_p95", "応答時間 p95", p95, _level(p95, 400, 600, higher_is_worse=True),
-               f"p95 {p95}ms", "タイムアウト（1000ms）が近い。推薦エンジンの負荷を見る"),
+        latency_signal,
     ]
+
+
+def phase_signal(state: dict | None) -> Signal:
+    if not state or state.get("phase_current") is None:
+        return Signal("ops_phase", "エンジンのフェーズ", "取得不能", UNKNOWN, "取得不能", "/ops/state が取れ次第確認する")
+    cur, judged, size = state["phase_current"], state.get("phase_judged"), state.get("decision_table_size")
+    level = GREEN if cur != "COVERAGE" else YELLOW
+    return Signal("ops_phase", "エンジンのフェーズ", cur, level,
+                  f"判定={judged} / 決定表={size if size is not None else '未取得'} / snapshot={state.get('snapshot_built_at') or '—'}",
+                  "COVERAGE のままなら決定表が育っていない。推薦側 §1 A-1（データ取り込み）を疑う")
+
+
+def gate_detail_signal(state: dict | None) -> Signal:
+    gate = (state or {}).get("gate_detail")
+    if not gate:
+        return Signal("quality_gate", "品質ゲート（size/rules/gamma/coverage）", "取得不能", UNKNOWN, "取得不能", "/ops/state が取れ次第確認する")
+    failed = [k for k, v in gate.items() if v is False]
+    passed = (state or {}).get("quality_gate_passed")
+    value = "通過" if passed else ("未通過: " + ", ".join(failed) if failed else "未通過")
+    detail = " / ".join(f"{k}={'○' if v else '×' if v is False else '?'}" for k, v in gate.items())
+    return Signal("quality_gate", "品質ゲート（size/rules/gamma/coverage）", value, GREEN if passed else YELLOW, detail,
+                  "どの項目で落ちているかを記録する（事後の PHASE_DRSA_MIN 見直しの根拠）。しきい値は当日変えない")
 
 
 def signal_board(unlock_events: pd.DataFrame, check_ins: pd.DataFrame, booth_ratings: pd.DataFrame,
                  ops_state: dict | None, now: pd.Timestamp,
                  ops_status: str | None = None) -> list[Signal]:
     """画面1（信号機）の全項目。この順で縦に並べる。"""
+    normalized = normalize_ops_state(ops_state)
     return [
         fallback_rate(unlock_events, now),
         rating_recovery_rate(booth_ratings, check_ins),
         current_phase(unlock_events, now),
         recent_unlock_count(unlock_events, now),
+        phase_signal(normalized),
+        gate_detail_signal(normalized),
         *ops_state_signals(ops_state, ops_status),
     ]
 

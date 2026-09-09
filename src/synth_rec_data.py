@@ -146,10 +146,21 @@ def generate(n_users: int = 110, seed: int = 20261016, *, recommender_dead: bool
 
 
 def ops_state(recommender_dead: bool) -> dict:
-    if recommender_dead:
-        # エンジンは死んでいる想定。実際にはこの応答自体が返らない（--no-ops-state で再現）
-        return {"gamma": 0.0, "n_certain_rules": 0, "rule_coverage": 0.0, "latency_p95_ms": 999}
-    return {"gamma": 0.62, "n_certain_rules": 5, "rule_coverage": 0.58, "latency_p95_ms": 320}
+    dead = recommender_dead
+    return {
+        "engine_version": "synth",
+        "snapshot": {"built_at": (EVENT_DAY + pd.Timedelta(hours=4)).isoformat(), "ok": not dead,
+                     "decision_table_size": 0 if dead else 42},
+        "rules": {"built_at": (EVENT_DAY + pd.Timedelta(hours=4)).isoformat(),
+                  "count_certain_up": 0 if dead else 3, "count_certain_down": 0 if dead else 2,
+                  "gamma": 0.0 if dead else 0.62, "candidate_coverage": 0.0 if dead else 0.58,
+                  "consistency_level": 0.9},
+        "phase": {"current": "COVERAGE" if dead else "DRSA", "judged": "COVERAGE" if dead else "DRSA",
+                  "quality_gate_passed": not dead,
+                  "gate_detail": {"size": not dead, "rules": not dead, "gamma": not dead, "coverage": not dead}},
+        "experiment": {"split_active": not dead, "split_started_at": None},
+        "notes": [],
+    }
 
 
 def rules_built_log() -> list[dict]:
