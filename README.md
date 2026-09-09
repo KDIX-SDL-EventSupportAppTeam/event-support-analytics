@@ -95,6 +95,9 @@ streamlit run src/post_analysis.py
   未設定でも当日監視は動く（`/ops/state` 由来の欄だけ「未設定」表示になる。仕様 03）。
   事後分析は当日取得した `ops_state.json` をダンプディレクトリに置くと「⑧ エンジン状態」タブで
   `gate_detail` / `decision_table_size` / `built_at` を参照できる（issue #18）
+- 「⑨ パラメータ妥当性」タブは推薦しきい値（`PHASE_SIMILARITY_MIN` ほか）の事後検証。
+  フェーズ切替時刻は `phase_changed.jsonl` があれば使い、無ければ `card_unlock_events` から復元。
+  **しきい値未到達も結果として記録する**（issue #11）
 - 算出式は `src/live_metrics.py` / `src/post_eval_metrics.py` にだけ書く（二重管理しない）
 - 当日画面は **A/B の効果（群別訪問率・その差）を表示しない**（仕様 03 §5）
 - `interest_match` は凍結値を使い再計算しない（仕様 04 §4）

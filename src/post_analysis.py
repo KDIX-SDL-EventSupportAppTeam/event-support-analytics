@@ -61,6 +61,15 @@ def load_rules(source_dir: str) -> list[dict]:
 
 
 @st.cache_data
+def load_phase_changed(source_dir: str) -> list[dict]:
+    """推薦側 `phase_changed` ログ（無ければ空。DB からの復元にフォールバックする）。"""
+    p = Path(source_dir) / "phase_changed.jsonl"
+    if not p.exists():
+        return []
+    return [json.loads(line) for line in p.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+
+@st.cache_data
 def load_ops_state(source_dir: str) -> dict | None:
     """`/ops/state` の凍結スナップショット（`ops_state.json`）。
 
@@ -187,6 +196,70 @@ def fig8_engine_state(ops_state: dict | None) -> None:
              f"規則の被覆率: **{s['rule_coverage'] if s['rule_coverage'] is not None else '未提供'}**")
 
 
+def fig9_param_validation(t: dict, ops_state: dict | None, phase_changed: list[dict]) -> None:
+    st.subheader("⑨ 推薦パラメータの妥当性検証（issue #11）")
+    st.caption("推薦側 ADR 0009「当日は既定値で走らせ、調整は事後」の"
+               "『事後』を引き受ける。**フェーズは来場時刻と交絡する**ので群間差を効果として読まない"
+               "（01 §2）。しきい値を決めるのは人間。ここは材料を出すだけ。")
+
+    ue = t["card_unlock_events"]
+
+    st.markdown("#### フェーズが切り替わった時刻")
+    pct = pem.phase_change_times(ue, phase_changed or None)
+    if pct.empty:
+        st.info("切り替わりなし（COVERAGE のまま）。これも結果として記録する。")
+    else:
+        show = pct.copy()
+        show["at"] = pd.to_datetime(show["at"], utc=True).dt.tz_convert("Asia/Tokyo")
+        st.dataframe(show, hide_index=True, column_config={
+            "at": st.column_config.DatetimeColumn("時刻（JST）", format="YYYY-MM-DD HH:mm")})
+        st.caption(f"出所: {', '.join(sorted(pct['source'].unique()))}"
+                   "（`phase_changed` ログがあれば優先、無ければ DB から復元）")
+
+    st.markdown("#### 決定表件数の推移としきい値")
+    smin = st.slider("PHASE_SIMILARITY_MIN（既定30・根拠が弱い）", 5, 120, pem.PHASE_SIMILARITY_MIN_DEFAULT, 5)
+    dmin = st.slider("PHASE_DRSA_MIN（条件属性2個で60・3個で180）", 20, 240, pem.PHASE_DRSA_MIN_DEFAULT, 10)
+    ts = pem.phase_comparison(ue, t["recommendation_scores"], t["check_ins"])
+    ue2 = ue.copy()
+    ue2["created_at"] = pd.to_datetime(ue2["created_at"], utc=True).dt.tz_convert("Asia/Tokyo")
+    ue2 = ue2.sort_values("created_at")
+    fig = go.Figure()
+    fig.add_scatter(x=ue2["created_at"], y=ue2["decision_table_size"], mode="markers",
+                    name="decision_table_size")
+    fig.add_hline(y=smin, line_dash="dot", annotation_text=f"SIMILARITY_MIN={smin}")
+    fig.add_hline(y=dmin, line_dash="dash", annotation_text=f"DRSA_MIN={dmin}")
+    for _, row in pem.phase_change_times(ue, phase_changed or None).iterrows():
+        at = pd.to_datetime(row["at"], utc=True)
+        if pd.notna(at):
+            fig.add_vline(x=at.tz_convert("Asia/Tokyo"), line_color="#888",
+                          annotation_text=f"{row['from']}→{row['to']}")
+    fig.update_layout(height=360, xaxis_title="時刻（JST）", yaxis_title="decision_table_size")
+    st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+
+    st.markdown("#### 実際に使われたフェーズ別の記述比較")
+    st.dataframe(ts, hide_index=True)
+    st.caption(ts.attrs.get("caveat", ""))
+
+    st.markdown("#### 別のしきい値ならどのフェーズだったか（件数条件のみの再計算）")
+    scenarios = dict(pem.COUNTERFACTUAL_SCENARIOS)
+    scenarios[f"スライダー現在値（{smin} / {dmin}）"] = (smin, dmin)
+    cf = pem.counterfactual_phase_distribution(ue, scenarios)
+    st.dataframe(cf, hide_index=True)
+    st.caption(f"解放 {cf.attrs.get('n_total')} 件中 {cf.attrs.get('n_measured')} 件で決定表件数が測れている。"
+               "品質ゲート（規則本数・γ・被覆率）は含めていない。下の表を参照。")
+
+    st.markdown("#### しきい値に到達したか（**未到達も結果として記録する**）")
+    rep = pem.threshold_report(ue, ops_state, similarity_min=smin, drsa_min=dmin)
+    st.write(rep["summary"])
+    rows = []
+    for c in rep["checks"]:
+        mark = {True: "✅ 到達", False: "⬜ 未到達（失敗ではない）", None: "— 判定不能"}[c["reached"]]
+        rows.append({"パラメータ": c["param"], "しきい値": c["threshold"],
+                     "観測値": c["observed"], "判定": mark, "注記": c["note"]})
+    st.dataframe(pd.DataFrame(rows), hide_index=True)
+    st.caption("規則が出ないからといってゲートを下げるのは去年の失敗の再現（推薦側 03-phases.md §3.3・R-3）。")
+
+
 def fig7_timeline(t: dict) -> None:
     st.subheader("⑦ 個票ビュー（1人の物語）")
     st.caption("仮名 ID のまま。実名・メールは扱わない。特定されうる属性の組み合わせと併用しない（04 §6）。")
@@ -216,12 +289,14 @@ def main() -> None:
         return
     rules = load_rules(source_dir)
     ops_state = load_ops_state(source_dir)
+    phase_changed = load_phase_changed(source_dir)
 
     tabs = st.tabs(["① 周遊 ", "② DRSA ", "③ セレンディピティ", "④ データ量", "⑤ 規則", "⑥ 未割当",
-                    "⑦ 個票", "⑧ エンジン状態"])
+                    "⑦ 個票", "⑧ エンジン状態", "⑨ パラメータ妥当性"])
     for tab, fn in zip(tabs, [fig1_ecdf, fig2_within_diff, fig3_funnel, fig4_bands,
                               lambda tt: fig5_rules(tt, rules), fig6_assigned, fig7_timeline,
-                              lambda _tt: fig8_engine_state(ops_state)]):
+                              lambda _tt: fig8_engine_state(ops_state),
+                              lambda tt: fig9_param_validation(tt, ops_state, phase_changed)]):
         with tab:
             fn(t)
 

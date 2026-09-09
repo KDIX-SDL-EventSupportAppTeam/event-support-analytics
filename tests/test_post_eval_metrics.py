@@ -176,3 +176,72 @@ def test_ops_state_summary_reads_synth_shape():
     s = pem.ops_state_summary(synth.ops_state(recommender_dead=False))
     assert s["available"] and s["gate_detail"]["size"] is True
     assert s["latency_p95_ms"] == 112  # 入れ子 latency_ms.p95 を読めている
+
+
+# --- 図⑨ 推薦パラメータの妥当性検証（issue #11）--------------------------
+
+
+def test_phase_from_size_uses_count_only_and_distinguishes_null():
+    assert pem.phase_from_size(10, 30, 60) == "COVERAGE"
+    assert pem.phase_from_size(45, 30, 60) == "SIMILARITY"
+    assert pem.phase_from_size(80, 30, 60) == "DRSA"
+    assert pem.phase_from_size(None) is None          # 測れなかった。0 と区別する
+    assert pem.phase_from_size(float("nan")) is None
+
+
+def test_phase_comparison_is_descriptive_and_ordered(tables):
+    out = pem.phase_comparison(tables["card_unlock_events"], tables["recommendation_scores"],
+                               tables["check_ins"])
+    assert list(out["phase"]) == ["COVERAGE", "SIMILARITY", "DRSA"]
+    assert "交絡" in out.attrs["caveat"]
+    assert (out["fallback_rate"].dropna().between(0, 1)).all()
+
+
+def test_phase_change_times_prefers_log_and_excludes_demo():
+    recs = synth.phase_changed_log(recommender_dead=False)
+    out = pem.phase_change_times(pd.DataFrame(), recs)
+    assert list(out["to"]) == ["SIMILARITY", "DRSA"]          # demo(log_kind=recommend_demo) は除外
+    assert (out["source"] == "log(phase_changed)").all()
+
+
+def test_phase_change_times_falls_back_to_db(tables):
+    out = pem.phase_change_times(tables["card_unlock_events"], None)
+    assert set(out.columns) >= {"at", "from", "to", "source"}
+    if not out.empty:
+        assert (out["source"] == "db(card_unlock_events)").all()
+        assert (out["from"] != out["to"]).all()
+
+
+def test_counterfactual_phase_distribution_recomputes_from_size(tables):
+    out = pem.counterfactual_phase_distribution(tables["card_unlock_events"])
+    assert out.iloc[0]["scenario"].startswith("実測")
+    strict = out[out["PHASE_DRSA_MIN"] == 180].iloc[0]
+    lenient = out[out["PHASE_DRSA_MIN"] == 45].iloc[0]
+    # DRSA_MIN を上げれば DRSA 到達解放数は減る（単調）
+    assert strict["DRSA到達 解放数"] <= lenient["DRSA到達 解放数"]
+
+
+def test_threshold_report_records_unreached_as_result_not_failure(tables):
+    ue = tables["card_unlock_events"].copy()
+    ue["decision_table_size"] = 12          # どのしきい値にも届かない
+    ue["phase"] = "COVERAGE"
+    rep = pem.threshold_report(ue, ops_state=None)
+    assert rep["max_decision_table_size"] == 12
+    assert rep["drsa_phase_ever_used"] is False
+    assert "PHASE_SIMILARITY_MIN" in rep["not_reached"]
+    assert "失敗ではなく" in rep["summary"]
+    # /ops/state 未取得のゲート項目は「判定不能」に入り、0 埋めされない
+    assert any("品質ゲート" in p for p in rep["undetermined"])
+
+
+def test_threshold_report_uses_ops_state_gate_values(tables):
+    payload = {"snapshot": {"decision_table_size": 90},
+               "rules": {"gamma": 0.3, "count_certain_up": 1, "count_certain_down": 0,
+                         "candidate_coverage": 0.2},
+               "phase": {"quality_gate_passed": False,
+                         "gate_detail": {"size": True, "rules": False, "gamma": False, "coverage": False}}}
+    ue = tables["card_unlock_events"].copy()
+    ue["decision_table_size"] = 90
+    rep = pem.threshold_report(ue, payload)
+    assert "DRSA_MIN_GAMMA" in rep["not_reached"]
+    assert "DRSA_MIN_RULES" in rep["not_reached"]

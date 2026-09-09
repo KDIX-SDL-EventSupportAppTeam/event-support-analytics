@@ -179,6 +179,29 @@ def rules_built_log() -> list[dict]:
     } for h in (4, 5, 6)]
 
 
+def phase_changed_log(recommender_dead: bool) -> list[dict]:
+    """推薦側の `phase_changed` ログ（`kind == "phase_changed"`）の疑似出力。
+
+    事後分析（post_eval_metrics.phase_change_times）が切り替わり時刻の特定に使う。
+    エンジンが死んでいる日は COVERAGE のまま切り替わらない。
+    """
+    if recommender_dead:
+        return []
+    base = EVENT_DAY
+    return [
+        {"ts": (base + pd.Timedelta(hours=3, minutes=40)).isoformat(), "kind": "phase_changed",
+         "from": "COVERAGE", "to": "SIMILARITY", "judged_phase": "SIMILARITY",
+         "fallback_reason": None, "log_kind": "recommend"},
+        {"ts": (base + pd.Timedelta(hours=4, minutes=25)).isoformat(), "kind": "phase_changed",
+         "from": "SIMILARITY", "to": "DRSA", "judged_phase": "DRSA",
+         "fallback_reason": None, "log_kind": "recommend"},
+        # デモ実行由来。log_kind が recommend でないので分析側で除外されること
+        {"ts": (base + pd.Timedelta(hours=4, minutes=30)).isoformat(), "kind": "phase_changed",
+         "from": "DRSA", "to": "COVERAGE", "judged_phase": "COVERAGE",
+         "fallback_reason": "demo", "log_kind": "recommend_demo"},
+    ]
+
+
 def write(out: Path, *, recommender_dead: bool, with_ops_state: bool, split_started: bool) -> None:
     out.mkdir(parents=True, exist_ok=True)
     tables = generate(recommender_dead=recommender_dead, split_started=split_started)
@@ -189,6 +212,9 @@ def write(out: Path, *, recommender_dead: bool, with_ops_state: bool, split_star
             json.dumps(ops_state(recommender_dead), ensure_ascii=False, indent=2), encoding="utf-8")
     with (out / "rules_built.jsonl").open("w", encoding="utf-8") as f:
         for rec in rules_built_log():
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    with (out / "phase_changed.jsonl").open("w", encoding="utf-8") as f:
+        for rec in phase_changed_log(recommender_dead):
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     print(f"wrote synthetic dataset to {out}"
           f"{'  [recommender-dead]' if recommender_dead else ''}"
