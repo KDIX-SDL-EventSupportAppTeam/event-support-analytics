@@ -1,5 +1,5 @@
 {
-  "dump_path": "data\\raw\\dump_20260909_201004.json",
+  "dump_file": "dump_20260909_201004.json",
   "generated_at": "2026-09-09T20:10:10+09:00",
   "raw_checkins": 2141,
   "excluded_out_of_period": 27,
