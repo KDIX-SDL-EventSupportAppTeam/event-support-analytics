@@ -1,6 +1,6 @@
 ---
 状態: 確定
-最終更新: 2026-09-01
+最終更新: 2026-09-10
 ---
 
 # 出展者・運営スタッフの分析除外方針
@@ -121,3 +121,48 @@ role による除外は `user_id` があるので従来どおり効く。
 [去年の規則](../analytics-pipeline/03-extraction/exclusion-rules.md#除外しないもの)と同じ。
 チェックイン0件の参加者、カード未生成の参加者、単発訪問者は**残す**。
 これらは「アプリを使わなかった層」の規模を示すため、分析上むしろ重要である。
+
+---
+
+## 6. server 側との照合（実施記録・issue #10）
+
+**照合日: 2026-09-10。** 対象コミット: server `8e5e584` 時点 / analytics `develop`。
+
+### 6.1 除外規則が server と一致しているか
+
+`event-support-server` を実際に grep（`role = 'participant'` / `role === 'participant'`）して確認した。
+**残るのはどこも `participant`（＋ `role IS NULL`）のみ**で、許可リスト方式に揃っている。
+
+| server の場所 | 絞り方 | analytics の対応 |
+|---|---|---|
+| `src/lib/bingo/fallback.ts:31`（E12）、`assignOuterCells.ts:277,416`、`ensureCard.ts:156`、`pickPreSurveyBooth.ts:43` | SQL で `users` を JOIN し `u.role = 'participant'` | `rec_db.participants_only()`（`load_tables()` 既定） |
+| `src/routes/v1/admin/dashboard.ts:18,23,59,61,72` | 同上（SQL JOIN） | 同上 |
+| `src/routes/v1/admin/analytics.ts:243` | SQL は `u.event_id = ?` のみ → 取得後に JS で `participants.filter(p => p.role === 'participant')` | 同上（§2 記載どおり） |
+| `src/routes/v1/admin/awards.ts:50,230`、`gacha.ts:60,86` | `u.role = 'participant' OR u.role IS NULL` | `participants_only()` は `role` 列や users 行が無い user を**除外しない**（§2 のフォールバック）。実質同じ集合 |
+
+**意図的に残している差**（§2）は照合後も維持する:
+`participants_only()` は users に居ない user_id / role 列欠損の行を落とさない。
+当日監視のテーブル間取得ずれで来場者を丸ごと落とすより安全側。
+事後分析はダンプ1回ぶんで `users` が揃うのでこの差は出ない。
+
+### 6.2 `users.event_id` で絞っていないこと
+
+`rec_db.scope_to_event()` は `name == "users"` を絞り込み対象から除外している
+（該当行: `if name == "users" or df.empty or "event_id" not in df.columns`）。
+出展者・運営も来場者と同じ `event_id` を持つ（§3）ため、
+`event_id` で絞ると混入する。**role だけが除外の仕事**という方針どおり。
+`tests/test_rec_db.py::test_sql_source_works_through_load_tables` が固定している。
+
+### 6.3 去年の pid 除外 UI との関係
+
+`src/dashboard.py` の pid 手入力欄と `build_tables.detect_staff_candidates()` は
+**去年データ専用**（role 列が無いため目視確定が要る）。
+今年の2画面（当日監視・事後分析）に pid 手入力欄は無く、`detect_staff_candidates()` 系の
+ヒューリスティックも使わない（§4）。この分離は照合時点で維持されている。
+
+### 6.4 server 側 `00-must-do.md` の該当項目
+
+`event-support-server/docs/specs/bingo-dynamic-unlock/00-must-do.md` の
+「△ 出展者・運営スタッフのアカウントを分析から除外できる状態にしておく」は、
+本節（§6.1〜§6.3）をもって「分析側の方針は未確認」が解消された。
+server 側リポジトリでのチェック反映は、そちらの作業ブランチと足並みを揃えて別途行う。
