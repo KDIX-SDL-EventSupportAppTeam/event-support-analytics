@@ -170,6 +170,23 @@ def fig6_assigned(t: dict) -> None:
              f"{'✅ OK' if out['sanity_ok'] else '⚠️ 要確認'}")
 
 
+def fig7_timeline(t: dict) -> None:
+    st.subheader("⑦ 個票ビュー（1人の物語）")
+    st.caption("仮名 ID のまま。実名・メールは扱わない。特定されうる属性の組み合わせと併用しない（04 §6）。")
+    uids = sorted(t["check_ins"]["user_id"].dropna().unique())
+    if not uids:
+        return
+    uid = st.selectbox("参加者", uids)
+    tl = pem.participant_timeline(uid, t["check_ins"], t["recommendation_scores"],
+                                 t["card_unlock_events"], t["booth_ratings"])
+    df = pd.DataFrame(tl)
+    if not df.empty:
+        # 保存は UTC。読むのは JST（AGENTS.md）。仕様 04 §6 の例も JST 表記
+        df["at"] = pd.to_datetime(df["at"], utc=True).dt.tz_convert("Asia/Tokyo")
+    st.dataframe(df, hide_index=True, column_config={"at": st.column_config.DatetimeColumn(
+        "時刻（JST）", format="HH:mm:ss")})
+
+
 def fig8_engine_state(ops_state: dict | None) -> None:
     st.subheader("⑧ エンジン状態 — /ops/state の凍結値（issue #18）")
     st.caption("当日の JSONL ログ・DB からは取れず、`/ops/state` からしか取れない値。"
@@ -203,9 +220,9 @@ def fig9_param_validation(t: dict, ops_state: dict | None, phase_changed: list[d
                "（01 §2）。しきい値を決めるのは人間。ここは材料を出すだけ。")
 
     ue = t["card_unlock_events"]
+    pct = pem.phase_change_times(ue, phase_changed or None)  # 表と縦線で使い回す（呼び出しは1回）
 
     st.markdown("#### フェーズが切り替わった時刻")
-    pct = pem.phase_change_times(ue, phase_changed or None)
     if pct.empty:
         st.info("切り替わりなし（COVERAGE のまま）。これも結果として記録する。")
     else:
@@ -228,7 +245,7 @@ def fig9_param_validation(t: dict, ops_state: dict | None, phase_changed: list[d
                     name="decision_table_size")
     fig.add_hline(y=smin, line_dash="dot", annotation_text=f"SIMILARITY_MIN={smin}")
     fig.add_hline(y=dmin, line_dash="dash", annotation_text=f"DRSA_MIN={dmin}")
-    for _, row in pem.phase_change_times(ue, phase_changed or None).iterrows():
+    for _, row in pct.iterrows():
         at = pd.to_datetime(row["at"], utc=True)
         if pd.notna(at):
             fig.add_vline(x=at.tz_convert("Asia/Tokyo"), line_color="#888",
@@ -258,23 +275,6 @@ def fig9_param_validation(t: dict, ops_state: dict | None, phase_changed: list[d
                      "観測値": c["observed"], "判定": mark, "注記": c["note"]})
     st.dataframe(pd.DataFrame(rows), hide_index=True)
     st.caption("規則が出ないからといってゲートを下げるのは去年の失敗の再現（推薦側 03-phases.md §3.3・R-3）。")
-
-
-def fig7_timeline(t: dict) -> None:
-    st.subheader("⑦ 個票ビュー（1人の物語）")
-    st.caption("仮名 ID のまま。実名・メールは扱わない。特定されうる属性の組み合わせと併用しない（04 §6）。")
-    uids = sorted(t["check_ins"]["user_id"].dropna().unique())
-    if not uids:
-        return
-    uid = st.selectbox("参加者", uids)
-    tl = pem.participant_timeline(uid, t["check_ins"], t["recommendation_scores"],
-                                 t["card_unlock_events"], t["booth_ratings"])
-    df = pd.DataFrame(tl)
-    if not df.empty:
-        # 保存は UTC。読むのは JST（AGENTS.md）。仕様 04 §6 の例も JST 表記
-        df["at"] = pd.to_datetime(df["at"], utc=True).dt.tz_convert("Asia/Tokyo")
-    st.dataframe(df, hide_index=True, column_config={"at": st.column_config.DatetimeColumn(
-        "時刻（JST）", format="HH:mm:ss")})
 
 
 def main() -> None:

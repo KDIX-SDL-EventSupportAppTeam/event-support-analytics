@@ -417,30 +417,35 @@ def phase_change_times(unlock_events: pd.DataFrame,
             and r.get("log_kind", "recommend") == "recommend"]
     if recs:
         df = pd.DataFrame([{
-            "at": pd.to_datetime(r.get("ts"), utc=True, errors="coerce"),
+            "at": r.get("ts"),
             "from": r.get("from"), "to": r.get("to"),
             "judged_phase": r.get("judged_phase"),
             "fallback_reason": r.get("fallback_reason"),
             "source": "log(phase_changed)",
         } for r in recs])
+        df["at"] = pd.to_datetime(df["at"], utc=True, errors="coerce")
         return df.sort_values("at").reset_index(drop=True)[cols]
 
     if unlock_events.empty:
         return pd.DataFrame(columns=cols)
     u = unlock_events.copy()
     u["created_at"] = pd.to_datetime(u["created_at"], utc=True)
-    u = u.sort_values("created_at")
-    changed = u["phase"].ne(u["phase"].shift())
+    u = u.sort_values("created_at").reset_index(drop=True)
+    prev_phase = u["phase"].shift()
+    changed = u["phase"].ne(prev_phase)
     changed.iloc[0] = False  # 最初の解放は「切り替わり」ではない
+    # `.values` は tz-aware Series を naive な numpy datetime64 に落とす。
+    # Series のまま抜き出して index を振り直すことで datetime64[..., UTC] を保つ。
     df = pd.DataFrame({
-        "at": u.loc[changed, "created_at"].values,
-        "from": u["phase"].shift().loc[changed].values,
-        "to": u.loc[changed, "phase"].values,
+        "at": u.loc[changed, "created_at"].reset_index(drop=True),
+        "from": prev_phase[changed].reset_index(drop=True),
+        "to": u.loc[changed, "phase"].reset_index(drop=True),
     })
+    df["at"] = pd.to_datetime(df["at"], utc=True)  # 空でも tz-aware dtype を保証する
     df["judged_phase"] = None
     df["fallback_reason"] = None
     df["source"] = "db(card_unlock_events)"
-    return df.reset_index(drop=True)[cols]
+    return df[cols]
 
 
 def counterfactual_phase_distribution(
@@ -490,9 +495,12 @@ def threshold_report(unlock_events: pd.DataFrame, ops_state: dict | None = None,
     **到達しなかったこと自体は失敗ではない**（issue #11）。「未到達」も結果として残す。
     規則が出ないからといってゲートを下げるのは去年の失敗の再現（推薦側 03-phases.md §3.3・R-3）。
     """
-    sizes = pd.to_numeric(unlock_events.get("decision_table_size"), errors="coerce").dropna()
+    if "decision_table_size" in unlock_events.columns:
+        sizes = pd.to_numeric(unlock_events["decision_table_size"], errors="coerce").dropna()
+    else:
+        sizes = pd.Series(dtype="float64")
     max_size = int(sizes.max()) if not sizes.empty else None
-    drsa_ever = bool((unlock_events.get("phase") == "DRSA").any()) if "phase" in unlock_events else False
+    drsa_ever = bool((unlock_events["phase"] == "DRSA").any()) if "phase" in unlock_events.columns else False
 
     checks = [
         _check("PHASE_SIMILARITY_MIN", similarity_min, max_size,

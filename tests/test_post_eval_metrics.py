@@ -202,14 +202,29 @@ def test_phase_change_times_prefers_log_and_excludes_demo():
     out = pem.phase_change_times(pd.DataFrame(), recs)
     assert list(out["to"]) == ["SIMILARITY", "DRSA"]          # demo(log_kind=recommend_demo) は除外
     assert (out["source"] == "log(phase_changed)").all()
+    assert str(out["at"].dt.tz) == "UTC"                      # ログ経路も tz-aware UTC
 
 
 def test_phase_change_times_falls_back_to_db(tables):
     out = pem.phase_change_times(tables["card_unlock_events"], None)
     assert set(out.columns) >= {"at", "from", "to", "source"}
+    assert str(out["at"].dt.tz) == "UTC"                      # DB 経路も tz-aware UTC（.values で落とさない）
     if not out.empty:
         assert (out["source"] == "db(card_unlock_events)").all()
         assert (out["from"] != out["to"]).all()
+
+
+def test_phase_change_times_db_path_keeps_utc_on_explicit_transitions():
+    ue = pd.DataFrame({
+        "created_at": pd.to_datetime(
+            ["2026-10-16T03:00:00Z", "2026-10-16T03:40:00Z", "2026-10-16T04:25:00Z"], utc=True),
+        "phase": ["COVERAGE", "SIMILARITY", "DRSA"],
+        "user_id": ["u0", "u0", "u0"],
+    })
+    out = pem.phase_change_times(ue, None)
+    assert list(out["to"]) == ["SIMILARITY", "DRSA"]
+    assert str(out["at"].dt.tz) == "UTC"
+    assert out["at"].iloc[0] == pd.Timestamp("2026-10-16T03:40:00Z")
 
 
 def test_counterfactual_phase_distribution_recomputes_from_size(tables):
@@ -232,6 +247,23 @@ def test_threshold_report_records_unreached_as_result_not_failure(tables):
     assert "失敗ではなく" in rep["summary"]
     # /ops/state 未取得のゲート項目は「判定不能」に入り、0 埋めされない
     assert any("品質ゲート" in p for p in rep["undetermined"])
+
+
+def test_threshold_report_tolerates_missing_decision_table_size_column():
+    """decision_table_size 列が無い DataFrame でも例外にならない（pd.to_numeric(None) 対策）。"""
+    ue = pd.DataFrame({"phase": ["COVERAGE", "COVERAGE"], "user_id": ["u0", "u1"]})
+    rep = pem.threshold_report(ue, ops_state=None)
+    assert rep["max_decision_table_size"] is None
+    assert rep["drsa_phase_ever_used"] is False
+    # 件数系チェックは判定不能（reached=None）。null を 0/false に丸めない
+    count_checks = [c for c in rep["checks"] if "PHASE_" in c["param"]]
+    assert count_checks and all(c["reached"] is None for c in count_checks)
+
+
+def test_threshold_report_tolerates_completely_empty_frame():
+    rep = pem.threshold_report(pd.DataFrame(), ops_state=None)
+    assert rep["max_decision_table_size"] is None
+    assert rep["drsa_phase_ever_used"] is False
 
 
 def test_threshold_report_uses_ops_state_gate_values(tables):
