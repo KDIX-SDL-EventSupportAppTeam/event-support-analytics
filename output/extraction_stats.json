@@ -1,0 +1,12 @@
+{
+  "dump_path": "data\\raw\\dump_20260909_201004.json",
+  "generated_at": "2026-09-09T20:10:10+09:00",
+  "raw_checkins": 2141,
+  "excluded_out_of_period": 27,
+  "excluded_out_of_period_users": 5,
+  "visits_in_period": 2114,
+  "visits_in_period_users": 252,
+  "excluded_pids": [],
+  "excluded_staff_users": 0,
+  "visits_after_staff_exclusion_users": 252
+}
