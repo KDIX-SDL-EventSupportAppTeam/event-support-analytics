@@ -175,3 +175,12 @@ def test_ops_state_signals_distinguish_token_missing():
 def test_synth_ops_state_is_production_shaped():
     s = lm.normalize_ops_state(synth.ops_state(recommender_dead=False))
     assert s["phase_current"] == "DRSA" and s["decision_table_size"] == 42 and s["n_certain_rules"] == 5
+
+
+def test_normalize_ops_state_reads_nested_latency_ms_p95():
+    """本番は latency_ms.p95（入れ子）で返す（推薦側 10-observability.md §2）。"""
+    s = lm.normalize_ops_state({"latency_ms": {"p50": 38, "p95": 112, "budget": 600}})
+    assert s["latency_p95_ms"] == 112
+    # フラットな latency_p95_ms が来ていればそちらを優先する
+    s2 = lm.normalize_ops_state({"latency_p95_ms": 320, "latency_ms": {"p95": 112}})
+    assert s2["latency_p95_ms"] == 320
