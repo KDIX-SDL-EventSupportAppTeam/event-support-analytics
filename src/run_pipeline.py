@@ -54,7 +54,9 @@ def main() -> None:
 
     stats_out = Path(args.stats_out)
     stats_out.parent.mkdir(parents=True, exist_ok=True)
-    record = {"dump_path": str(dump_path),
+    # ダンプはファイル名だけ残す。フルパスは実行環境（Windows / CD の Linux）で変わり
+    # 再現しないうえ、どのダンプかは名前で十分に分かる。
+    record = {"dump_file": dump_path.name,
               "generated_at": datetime.now(ZoneInfo("Asia/Tokyo")).isoformat(timespec="seconds"),
               **stats}
     with stats_out.open("w", encoding="utf-8") as f:

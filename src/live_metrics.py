@@ -164,11 +164,25 @@ def normalize_ops_state(payload: dict | None) -> dict | None:
     if n_certain is None and (up is not None or down is not None):
         n_certain = int(up or 0) + int(down or 0)
     gate = phase.get("gate_detail")
+    latency = payload.get("latency_ms") if isinstance(payload.get("latency_ms"), dict) else {}
+    # トップレベルに実値があればそれを使い、**None のときだけ**入れ子を見る。
+    # `dict.get(k, fallback)` はキーが存在して値が None のとき fallback を返さないため、
+    # {"gamma": None, "rules": {"gamma": 0.8}} で gamma=None に潰れる。3項目とも同じ書き方に揃える。
+    gamma = payload.get("gamma")
+    if gamma is None:
+        gamma = rules.get("gamma")
+    rule_coverage = payload.get("rule_coverage")
+    if rule_coverage is None:
+        rule_coverage = rules.get("candidate_coverage")
+    # 本番は `latency_ms.p95`（入れ子）、合成データは `latency_p95_ms`（フラット）。無ければ None。
+    p95 = payload.get("latency_p95_ms")
+    if p95 is None:
+        p95 = latency.get("p95")
     return {
-        "gamma": payload.get("gamma", rules.get("gamma")),
+        "gamma": gamma,
         "n_certain_rules": n_certain,
-        "rule_coverage": payload.get("rule_coverage", rules.get("candidate_coverage")),
-        "latency_p95_ms": payload.get("latency_p95_ms"),
+        "rule_coverage": rule_coverage,
+        "latency_p95_ms": p95,
         "phase_current": phase.get("current"),
         "phase_judged": phase.get("judged"),
         "quality_gate_passed": phase.get("quality_gate_passed"),

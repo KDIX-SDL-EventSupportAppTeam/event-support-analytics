@@ -17,6 +17,8 @@ import json
 import numpy as np
 import pandas as pd
 
+import live_metrics  # noqa: E402  -- `/ops/state` の正規化を二重に持たない（03/04 共通の入れ子→フラット変換）
+
 HIGH_RATING_DEFAULT = 4  # 「高評価」の凍結定義。星4段階で 4 以上（04 §0「事前に凍結する」）
 FUNNEL_MATCH_ORDER = ["MATCH", "PARTIAL", "MISMATCH", "UNKNOWN"]
 POWER_CAVEAT = "各群 600〜700枠・訪問は各群100件前後。検出できるのは 8ポイント程度の差まで。" \
@@ -250,6 +252,322 @@ def _format_rule(rule: dict) -> str:
     head = " かつ ".join(parts) if parts else "（条件なし）"
     tail = "評価 >= HIGH" if rule.get("direction") == "up" else "評価 <= LOW"
     return f"if {head} then {tail}"
+
+
+# --- 図⑧ エンジン状態（/ops/state の凍結値）（issue #18 / #11）----------
+
+#: `/ops/state` の `gate_detail` の4項目。**まとめて1つの真偽値にしない**（issue #18 T-9）。
+GATE_ITEMS = ("size", "rules", "gamma", "coverage")
+
+
+def ops_state_summary(ops_state: dict | None) -> dict:
+    """事後分析が参照する `/ops/state` 由来の値。
+
+    当日の JSONL ログ／DB からは取れず `/ops/state` からしか取れないもの（issue #18）:
+
+    - `gate_detail`（`size` / `rules` / `gamma` / `coverage` を**個別に**）
+      — 「なぜ DRSA に上がらなかったか」の答え。来年の `PHASE_DRSA_MIN`・品質ゲート見直しの根拠
+    - `decision_table_size` — 決定表が実際に何件まで育ったか
+    - `snapshot_built_at` — 最後に取り込めた時刻
+
+    取得できていない（`ops_state` が None）ときは `available=False` を返し、
+    **0 や空値で埋めない**（「フェーズが上がらなかった」のか「取れていない」のかを区別する。
+    issue #18「起きてはいけないこと」）。
+    """
+    norm = live_metrics.normalize_ops_state(ops_state)
+    if norm is None:
+        return {"available": False, "note": "`/ops/state` を取得できていない。"
+                "『DRSA に上がらなかった』と『状態が取れていない』は区別すること（issue #18）。"}
+    gate = norm.get("gate_detail") or {}
+    gate_by_item = {k: gate.get(k) for k in GATE_ITEMS}
+    failed = [k for k, v in gate_by_item.items() if v is False]
+    passed = norm.get("quality_gate_passed")
+    return {
+        "available": True,
+        "phase_current": norm.get("phase_current"),
+        "phase_judged": norm.get("phase_judged"),
+        "quality_gate_passed": passed,
+        "gate_detail": gate_by_item,
+        "gate_failed_items": failed,
+        "gate_reason": _gate_reason(passed, failed, gate_by_item),
+        "decision_table_size": norm.get("decision_table_size"),
+        "snapshot_built_at": norm.get("snapshot_built_at"),
+        "rules_built_at": norm.get("rules_built_at"),
+        "gamma": norm.get("gamma"),
+        "n_certain_rules": norm.get("n_certain_rules"),
+        "rule_coverage": norm.get("rule_coverage"),
+        "latency_p95_ms": norm.get("latency_p95_ms"),
+    }
+
+
+def _gate_reason(passed, failed: list[str], gate_by_item: dict) -> str:
+    if passed:
+        return "品質ゲート通過。DRSA が発火した。"
+    if all(v is None for v in gate_by_item.values()):
+        return "本番推薦を1件も処理していないため gate_detail が未提供（null）。0/false で埋めない。"
+    if failed:
+        label = {"size": "決定表件数", "rules": "確実規則の本数", "gamma": "近似の質 γ",
+                 "coverage": "規則の被覆率"}
+        return "品質ゲート未通過。落ちた項目: " + "、".join(label.get(k, k) for k in failed) \
+            + "（この項目が来年の見直し対象）。"
+    return "品質ゲート未通過（落ちた項目の内訳は gate_detail 参照）。"
+
+
+# --- 図⑨ 推薦パラメータの妥当性検証（issue #11）------------------------
+#
+# 推薦側 ADR 0009「当日は既定値のまま走らせ、調整は事後に行う」の「事後」を引き受ける。
+# **フェーズは時刻と交絡する**（01 §2）。フェーズ別の比較で因果を主張しない。記述にとどめる。
+# しきい値を決めるのは人間である（推薦側 03-phases.md §3.1）。ここは材料を出すだけ。
+
+#: 推薦側 03-phases.md §3 の既定値。**根拠が弱い／未決定**のものを含む（issue #11 の検証対象）。
+PHASE_SIMILARITY_MIN_DEFAULT = 30   # 「根拠が弱いと明記されている」（03-phases.md §3.2）
+PHASE_DRSA_MIN_DEFAULT = 60         # 条件属性2個での既定。3個なら 180（§3.1）
+DRSA_MIN_RULES_DEFAULT = 3
+DRSA_MIN_GAMMA_DEFAULT = 0.5
+DRSA_MIN_COVERAGE_DEFAULT = 0.5
+PHASE_ORDER = ("COVERAGE", "SIMILARITY", "DRSA")
+
+#: 感度分析の既定シナリオ。(PHASE_SIMILARITY_MIN, PHASE_DRSA_MIN)。
+COUNTERFACTUAL_SCENARIOS = {
+    "既定（30 / 60）": (30, 60),
+    "DRSA_MIN=180（条件属性3個相当）": (30, 180),
+    "SIMILARITY_MIN=20": (20, 60),
+    "SIMILARITY_MIN=45": (45, 60),
+    "DRSA_MIN=45": (30, 45),
+}
+
+
+def phase_from_size(size, similarity_min: int = PHASE_SIMILARITY_MIN_DEFAULT,
+                    drsa_min: int = PHASE_DRSA_MIN_DEFAULT) -> str | None:
+    """`decision_table_size` からフェーズを引く（件数条件のみ。品質ゲートは別。03-phases.md §1）。
+
+    測れなかった（`null`）ものは `None` を返す。**0 と区別する**（§2）。
+    """
+    if size is None or (isinstance(size, float) and np.isnan(size)):
+        return None
+    size = float(size)
+    if size < similarity_min:
+        return "COVERAGE"
+    if size < drsa_min:
+        return "SIMILARITY"
+    return "DRSA"
+
+
+def _rec_visit_rate(scores_subset: pd.DataFrame, check_ins: pd.DataFrame) -> float | None:
+    """推薦枠（`was_assigned=1`）のうち実際に訪問された割合。"""
+    assigned = scores_subset[scores_subset["was_assigned"] == 1]
+    if assigned.empty:
+        return None
+    visited = set(zip(check_ins["user_id"], check_ins["booth_id"]))
+    hit = [(u, b) in visited for u, b in zip(assigned["user_id"], assigned["booth_id"])]
+    return float(np.mean(hit))
+
+
+def phase_comparison(unlock_events: pd.DataFrame, recommendation_scores: pd.DataFrame,
+                     check_ins: pd.DataFrame) -> pd.DataFrame:
+    """**実際に使われた**フェーズ（`card_unlock_events.phase`）別の記述比較。
+
+    `card_unlock_events.phase` にはその解放で実際に使われた戦略が入る（issue #11）。
+    フェーズは来場時刻と交絡するため（早い人ほど COVERAGE、遅い人ほど DRSA）、
+    **群間差を効果として読まない**（01 §2・04 §5）。列は記述統計にとどめる。
+    """
+    ue = unlock_events.copy()
+    ue["created_at"] = pd.to_datetime(ue["created_at"], utc=True)
+    sc = recommendation_scores.copy()
+    sc["created_at"] = pd.to_datetime(sc["created_at"], utc=True)
+    # scores を解放イベントへ結び付ける（unlock_event_id があればそれで、無ければ時刻で）
+    if "unlock_event_id" in sc.columns and "id" in ue.columns:
+        link = sc.merge(ue[["id", "phase"]].rename(columns={"id": "unlock_event_id"}),
+                        on="unlock_event_id", how="left")
+    else:
+        link = pd.merge_asof(sc.sort_values("created_at"),
+                             ue[["created_at", "user_id", "phase"]].sort_values("created_at"),
+                             on="created_at", by="user_id", direction="backward")
+    rows = []
+    for phase in PHASE_ORDER:
+        u = ue[ue["phase"] == phase]
+        s = link[link["phase"] == phase]
+        sizes = u["decision_table_size"].dropna()
+        rows.append({
+            "phase": phase,
+            "n_unlocks": int(len(u)),
+            "n_users": int(u["user_id"].nunique()) if "user_id" in u.columns else None,
+            "decision_table_size_min": int(sizes.min()) if not sizes.empty else None,
+            "decision_table_size_max": int(sizes.max()) if not sizes.empty else None,
+            "fallback_rate": float((u["strategy"] == "FALLBACK_COVERAGE").mean()) if len(u) else None,
+            "rec_slot_visit_rate": _rec_visit_rate(s, check_ins),
+            "first_seen_at": u["created_at"].min() if len(u) else pd.NaT,
+        })
+    out = pd.DataFrame(rows)
+    out.attrs["caveat"] = "フェーズは来場時刻と交絡する。群間差を効果として読まない（01 §2）。"
+    return out
+
+
+def phase_change_times(unlock_events: pd.DataFrame,
+                       phase_changed_records: list[dict] | None = None) -> pd.DataFrame:
+    """フェーズが切り替わった時刻。列: `at` / `from` / `to` / `judged_phase` / `fallback_reason` / `source`。
+
+    推薦側の `phase_changed` ログ（`kind == "phase_changed"`）があればそれを使う。
+    無ければ DB（`card_unlock_events.phase` の変化）から復元する。**DB 由来は当日必ず取れる。**
+    デモ・リプレイ由来（`log_kind != "recommend"`）は研究ログではないので除外する（推薦側 10 §3）。
+    """
+    cols = ["at", "from", "to", "judged_phase", "fallback_reason", "source"]
+    recs = [r for r in (phase_changed_records or [])
+            if r.get("kind", "phase_changed") == "phase_changed"
+            and r.get("log_kind", "recommend") == "recommend"]
+    if recs:
+        df = pd.DataFrame([{
+            "at": r.get("ts"),
+            "from": r.get("from"), "to": r.get("to"),
+            "judged_phase": r.get("judged_phase"),
+            "fallback_reason": r.get("fallback_reason"),
+            "source": "log(phase_changed)",
+        } for r in recs])
+        df["at"] = pd.to_datetime(df["at"], utc=True, errors="coerce")
+        return df.sort_values("at").reset_index(drop=True)[cols]
+
+    if unlock_events.empty:
+        return pd.DataFrame(columns=cols)
+    u = unlock_events.copy()
+    u["created_at"] = pd.to_datetime(u["created_at"], utc=True)
+    u = u.sort_values("created_at").reset_index(drop=True)
+    prev_phase = u["phase"].shift()
+    changed = u["phase"].ne(prev_phase)
+    changed.iloc[0] = False  # 最初の解放は「切り替わり」ではない
+    # `.values` は tz-aware Series を naive な numpy datetime64 に落とす。
+    # Series のまま抜き出して index を振り直すことで datetime64[..., UTC] を保つ。
+    df = pd.DataFrame({
+        "at": u.loc[changed, "created_at"].reset_index(drop=True),
+        "from": prev_phase[changed].reset_index(drop=True),
+        "to": u.loc[changed, "phase"].reset_index(drop=True),
+    })
+    df["at"] = pd.to_datetime(df["at"], utc=True)  # 空でも tz-aware dtype を保証する
+    df["judged_phase"] = None
+    df["fallback_reason"] = None
+    df["source"] = "db(card_unlock_events)"
+    return df[cols]
+
+
+def counterfactual_phase_distribution(
+        unlock_events: pd.DataFrame,
+        scenarios: dict[str, tuple[int, int]] | None = None) -> pd.DataFrame:
+    """`decision_table_size` から「別のしきい値ならどのフェーズだったか」を再計算する（issue #11）。
+
+    件数条件のみの再計算である（品質ゲートは `/ops/state` 側。§ ゲート感度は別関数）。
+    先頭行 `実測` は `card_unlock_events.phase`（実際に使われた値）。
+    """
+    scenarios = scenarios or COUNTERFACTUAL_SCENARIOS
+    sizes = unlock_events["decision_table_size"]
+    n_total = int(len(unlock_events))
+    n_measured = int(sizes.notna().sum())
+
+    def _dist(series: pd.Series) -> dict:
+        counts = series.value_counts()
+        drsa_users = unlock_events.loc[series[series == "DRSA"].index, "user_id"].nunique() \
+            if "user_id" in unlock_events.columns else None
+        return {
+            **{p: int(counts.get(p, 0)) for p in PHASE_ORDER},
+            "未測定(null)": int(series.isna().sum()),
+            "DRSA到達 解放数": int(counts.get("DRSA", 0)),
+            "DRSA到達 参加者数": int(drsa_users) if drsa_users is not None else None,
+        }
+
+    rows = [{"scenario": "実測（card_unlock_events.phase）", "PHASE_SIMILARITY_MIN": None,
+             "PHASE_DRSA_MIN": None, **_dist(unlock_events["phase"])}]
+    for name, (smin, dmin) in scenarios.items():
+        recomputed = sizes.map(lambda v: phase_from_size(v, smin, dmin))
+        rows.append({"scenario": name, "PHASE_SIMILARITY_MIN": smin, "PHASE_DRSA_MIN": dmin,
+                     **_dist(recomputed)})
+    out = pd.DataFrame(rows)
+    out.attrs["n_total"] = n_total
+    out.attrs["n_measured"] = n_measured
+    return out
+
+
+def threshold_report(unlock_events: pd.DataFrame, ops_state: dict | None = None, *,
+                     similarity_min: int = PHASE_SIMILARITY_MIN_DEFAULT,
+                     drsa_min: int = PHASE_DRSA_MIN_DEFAULT,
+                     min_rules: int = DRSA_MIN_RULES_DEFAULT,
+                     min_gamma: float = DRSA_MIN_GAMMA_DEFAULT,
+                     min_coverage: float = DRSA_MIN_COVERAGE_DEFAULT) -> dict:
+    """各しきい値に到達したかを記録する。
+
+    **到達しなかったこと自体は失敗ではない**（issue #11）。「未到達」も結果として残す。
+    規則が出ないからといってゲートを下げるのは去年の失敗の再現（推薦側 03-phases.md §3.3・R-3）。
+    """
+    if "decision_table_size" in unlock_events.columns:
+        sizes = pd.to_numeric(unlock_events["decision_table_size"], errors="coerce").dropna()
+    else:
+        sizes = pd.Series(dtype="float64")
+    max_size = int(sizes.max()) if not sizes.empty else None
+    drsa_ever = bool((unlock_events["phase"] == "DRSA").any()) if "phase" in unlock_events.columns else False
+
+    checks = [
+        _check("PHASE_SIMILARITY_MIN", similarity_min, max_size,
+               None if max_size is None else max_size >= similarity_min,
+               "決定表件数の最大値がしきい値に届いたか"),
+        _check("PHASE_DRSA_MIN（件数条件）", drsa_min, max_size,
+               None if max_size is None else max_size >= drsa_min,
+               "件数だけで見た DRSA 到達可否。品質ゲートは別"),
+    ]
+
+    gate = ops_state_summary(ops_state)
+    if not gate["available"]:
+        checks.append({"param": "品質ゲート（DRSA_MIN_RULES/GAMMA/COVERAGE）", "threshold": None,
+                       "observed": None, "reached": None,
+                       "note": "/ops/state 未取得のため判定不能。当日の ops_state.json を置くこと"})
+    else:
+        g_gamma, g_rules, g_cov = gate["gamma"], gate["n_certain_rules"], gate["rule_coverage"]
+        checks += [
+            _check("DRSA_MIN_RULES", min_rules, g_rules,
+                   None if g_rules is None else g_rules >= min_rules,
+                   "確実規則の本数（/ops/state のスナップショット時点。全期間の最大ではない）"),
+            _check("DRSA_MIN_GAMMA", min_gamma, g_gamma,
+                   None if g_gamma is None else g_gamma >= min_gamma,
+                   "近似の質 γ（同上・時点値）"),
+            _check("DRSA_MIN_COVERAGE", min_coverage, g_cov,
+                   None if g_cov is None else g_cov >= min_coverage,
+                   "規則が候補を覆う割合（同上・時点値）"),
+        ]
+        checks.append({"param": "品質ゲート 総合（gate_detail）", "threshold": "全項目 AND",
+                       "observed": "通過" if gate["quality_gate_passed"] else
+                       ("未提供" if gate["quality_gate_passed"] is None else
+                        "未通過: " + ", ".join(gate["gate_failed_items"])),
+                       "reached": gate["quality_gate_passed"], "note": gate["gate_reason"]})
+
+    reached = [c["param"] for c in checks if c["reached"] is True]
+    not_reached = [c["param"] for c in checks if c["reached"] is False]
+    undetermined = [c["param"] for c in checks if c["reached"] is None]
+    return {
+        "max_decision_table_size": max_size,
+        "drsa_phase_ever_used": drsa_ever,
+        "checks": checks,
+        "reached": reached,
+        "not_reached": not_reached,
+        "undetermined": undetermined,
+        "summary": _threshold_summary(max_size, drsa_ever, not_reached, undetermined),
+    }
+
+
+def _check(param: str, threshold, observed, reached, note: str) -> dict:
+    return {"param": param, "threshold": threshold, "observed": observed,
+            "reached": reached, "note": note}
+
+
+def _threshold_summary(max_size, drsa_ever: bool, not_reached: list[str], undetermined: list[str]) -> str:
+    parts = []
+    if max_size is None:
+        parts.append("決定表件数が1件も測れていない（`null`）。当日エンジンがデータへ到達できていなかった可能性。")
+    else:
+        parts.append(f"決定表件数の最大は {max_size}。")
+    parts.append("DRSA フェーズは当日" + ("使われた。" if drsa_ever else "一度も使われなかった。"))
+    if not_reached:
+        parts.append("未到達（失敗ではなく、その事実を結果として記録する）: " + " / ".join(not_reached) + "。")
+    if undetermined:
+        parts.append("判定不能（データ不足）: " + " / ".join(undetermined) + "。")
+    if not not_reached and not undetermined:
+        parts.append("すべてのしきい値に到達した。")
+    return " ".join(parts)
 
 
 # --- 図⑦ 個票ビュー（1人の物語）（04 §6）------------------------------
