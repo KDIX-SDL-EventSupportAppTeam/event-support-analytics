@@ -124,7 +124,23 @@ gcloud iam workload-identity-pools providers describe github-oidc --location glo
 - 合言葉を変えたあとは、Cloud Run が `:latest` を読み直すよう**再デプロイが要る**
   （`deploy.sh --set-password` は再デプロイまで行う）
 - 推薦の2画面はデプロイ版では**合成データのまま**である。実データへの切り替えは
-  [deploy.md](deploy.md) の通り環境変数の追加が要る。CD は現状その変数を渡していない
+  [deploy.md](deploy.md) の通り環境変数の追加が要る
+
+## 推薦エンジン連携（#18）
+
+CD は `RECOMMEND_BASE_URL`（GitHub variable）と `RECOMMEND_OPS_TOKEN`（Secret Manager）を
+Cloud Run に渡す。渡すには、次の2つが揃っている必要がある。
+
+- GitHub variable `RECOMMEND_BASE_URL`（推薦サービスの Cloud Run URL）を設定する
+- Secret Manager に `RECOMMEND_OPS_TOKEN` が存在し、デプロイ用 SA に
+  `roles/secretmanager.secretAccessor` が付与されていること（recommend #15 の成果物）
+
+**この2つが揃うまで `develop` → `main` の PR を作らない。** 揃っていなければ、
+デプロイステップ冒頭の `test -n "${RECOMMEND_BASE_URL}"` か、その先のシークレット解決の
+どちらかで失敗する（順序制約）。
+
+`REC_SOURCE=sql` への切り替えや `REC_READONLY_PROXY_*`（#9・本番 DB への読み取り専用接続）は
+本 issue の対象外であり、CD にはまだ追加しない。
 
 ## 課金について
 

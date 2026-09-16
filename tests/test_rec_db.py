@@ -319,18 +319,22 @@ def test_ops_state_client_sends_x_ops_token_header(monkeypatch):
     assert "s3cret" not in seen[0].full_url
 
 
-def test_ops_state_client_omits_header_without_token(monkeypatch):
+def test_ops_state_client_reports_token_missing_without_request(monkeypatch):
+    """T-2: 未設定なら**叩かない**。ヘッダ無しで叩くと 401 になり「誤り」と区別できない。"""
     monkeypatch.delenv(rec_db.OpsStateClient.TOKEN_ENV, raising=False)
     seen = _capture_request(monkeypatch)
-
-    rec_db.OpsStateClient("http://example.invalid").fetch()
-
-    assert "X-ops-token" not in seen[0].headers
+    result = rec_db.OpsStateClient("http://example.invalid").fetch_result()
+    assert result == rec_db.OpsStateResult(None, rec_db.OPS_TOKEN_MISSING)
+    assert seen == []
 
 
 @pytest.mark.parametrize("code", [401, 403])
 def test_ops_state_client_reports_auth_error(monkeypatch, code):
     """401/403 は「取得不能」と区別する。**設定漏れとエンジン停止は打つ手が違う。**"""
+    # T-2 導入後は未設定だと OPS_TOKEN_MISSING で早期returnし HTTP 層に届かないため、
+    # このテストが検証したい 401/403 の扱いを見るにはトークンを設定しておく必要がある。
+    monkeypatch.setenv(rec_db.OpsStateClient.TOKEN_ENV, "s3cret")
+
     def boom(*_a, **_k):
         raise urllib.error.HTTPError("http://example.invalid", code, "no", {}, None)
 
@@ -342,6 +346,10 @@ def test_ops_state_client_reports_auth_error(monkeypatch, code):
 @pytest.mark.parametrize("code", [404, 500, 503])
 def test_ops_state_client_reports_unavailable_for_other_http_errors(monkeypatch, code):
     """404（OPS_TOKEN 未設定でルート自体が無い）や 5xx は向こう側の問題＝取得不能。"""
+    # T-2 導入後は未設定だと OPS_TOKEN_MISSING で早期returnし HTTP 層に届かないため、
+    # このテストが検証したい 404/5xx の扱いを見るにはトークンを設定しておく必要がある。
+    monkeypatch.setenv(rec_db.OpsStateClient.TOKEN_ENV, "s3cret")
+
     def boom(*_a, **_k):
         raise urllib.error.HTTPError("http://example.invalid", code, "no", {}, None)
 

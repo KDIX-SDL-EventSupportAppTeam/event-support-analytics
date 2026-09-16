@@ -146,10 +146,23 @@ def generate(n_users: int = 110, seed: int = 20261016, *, recommender_dead: bool
 
 
 def ops_state(recommender_dead: bool) -> dict:
-    if recommender_dead:
-        # エンジンは死んでいる想定。実際にはこの応答自体が返らない（--no-ops-state で再現）
-        return {"gamma": 0.0, "n_certain_rules": 0, "rule_coverage": 0.0, "latency_p95_ms": 999}
-    return {"gamma": 0.62, "n_certain_rules": 5, "rule_coverage": 0.58, "latency_p95_ms": 320}
+    dead = recommender_dead
+    return {
+        "engine_version": "synth",
+        "snapshot": {"built_at": (EVENT_DAY + pd.Timedelta(hours=4)).isoformat(), "ok": not dead,
+                     "decision_table_size": 0 if dead else 42},
+        "rules": {"built_at": (EVENT_DAY + pd.Timedelta(hours=4)).isoformat(),
+                  "count_certain_up": 0 if dead else 3, "count_certain_down": 0 if dead else 2,
+                  "gamma": 0.0 if dead else 0.62, "candidate_coverage": 0.0 if dead else 0.58,
+                  "consistency_level": 0.9},
+        "phase": {"current": "COVERAGE" if dead else "DRSA", "judged": "COVERAGE" if dead else "DRSA",
+                  "quality_gate_passed": not dead,
+                  "gate_detail": {"size": not dead, "rules": not dead, "gamma": not dead, "coverage": not dead}},
+        "experiment": {"split_active": not dead, "split_started_at": None},
+        "latency_ms": {"p50": 38, "p95": 900 if dead else 112, "budget": 600},
+        "requests": {"last_30min": 0 if dead else 214, "errors_last_30min": 214 if dead else 0},
+        "notes": [],
+    }
 
 
 def rules_built_log() -> list[dict]:
@@ -166,6 +179,29 @@ def rules_built_log() -> list[dict]:
     } for h in (4, 5, 6)]
 
 
+def phase_changed_log(recommender_dead: bool) -> list[dict]:
+    """推薦側の `phase_changed` ログ（`kind == "phase_changed"`）の疑似出力。
+
+    事後分析（post_eval_metrics.phase_change_times）が切り替わり時刻の特定に使う。
+    エンジンが死んでいる日は COVERAGE のまま切り替わらない。
+    """
+    if recommender_dead:
+        return []
+    base = EVENT_DAY
+    return [
+        {"ts": (base + pd.Timedelta(hours=3, minutes=40)).isoformat(), "kind": "phase_changed",
+         "from": "COVERAGE", "to": "SIMILARITY", "judged_phase": "SIMILARITY",
+         "fallback_reason": None, "log_kind": "recommend"},
+        {"ts": (base + pd.Timedelta(hours=4, minutes=25)).isoformat(), "kind": "phase_changed",
+         "from": "SIMILARITY", "to": "DRSA", "judged_phase": "DRSA",
+         "fallback_reason": None, "log_kind": "recommend"},
+        # デモ実行由来。log_kind が recommend でないので分析側で除外されること
+        {"ts": (base + pd.Timedelta(hours=4, minutes=30)).isoformat(), "kind": "phase_changed",
+         "from": "DRSA", "to": "COVERAGE", "judged_phase": "COVERAGE",
+         "fallback_reason": "demo", "log_kind": "recommend_demo"},
+    ]
+
+
 def write(out: Path, *, recommender_dead: bool, with_ops_state: bool, split_started: bool) -> None:
     out.mkdir(parents=True, exist_ok=True)
     tables = generate(recommender_dead=recommender_dead, split_started=split_started)
@@ -176,6 +212,9 @@ def write(out: Path, *, recommender_dead: bool, with_ops_state: bool, split_star
             json.dumps(ops_state(recommender_dead), ensure_ascii=False, indent=2), encoding="utf-8")
     with (out / "rules_built.jsonl").open("w", encoding="utf-8") as f:
         for rec in rules_built_log():
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    with (out / "phase_changed.jsonl").open("w", encoding="utf-8") as f:
+        for rec in phase_changed_log(recommender_dead):
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
     print(f"wrote synthetic dataset to {out}"
           f"{'  [recommender-dead]' if recommender_dead else ''}"

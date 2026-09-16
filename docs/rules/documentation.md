@@ -33,7 +33,7 @@
 |---|---|
 | DB スキーマ・API 契約・ビジネスルール | `event-support-server` |
 | 画面遷移・UI の見せ方・演出 | `event-support-frontend` |
-| 推薦アルゴリズムの内部 | `event-support-recommender` |
+| 推薦アルゴリズムの内部 | `event-support-recommend` |
 | 指標の定義・分析手順 | `event-support-analytics` |
 
 参照する側は**リンクだけ置き、内容をコピーしない**。

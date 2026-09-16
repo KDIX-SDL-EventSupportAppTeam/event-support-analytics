@@ -34,6 +34,7 @@ jobs:
       SECRET: ${{ vars.DASHBOARD_SECRET }}
       TABLES_URI: ${{ vars.TABLES_GCS_URI }}
       SUPPORT_CONTACT: ${{ vars.SUPPORT_CONTACT }}
+      RECOMMEND_BASE_URL: ${{ vars.RECOMMEND_BASE_URL }}
 
     steps:
       - uses: actions/checkout@v4
@@ -61,6 +62,8 @@ jobs:
         # アクセス制御は画面側の合言葉（src/auth.py）が担う。
         # 合言葉そのものは CI では作らない（Secret Manager の既存バージョンを参照）。
         run: |
+          test -n "${RECOMMEND_BASE_URL}" \
+            || { echo "GitHub variable RECOMMEND_BASE_URL が未設定です（docs/operations/cd.md §推薦エンジン連携）" >&2; exit 1; }
           gcloud run deploy "${SERVICE}" \
             --source . \
             --project "${PROJECT}" \
@@ -72,8 +75,8 @@ jobs:
             --min-instances 0 \
             --max-instances 3 \
             --session-affinity \
-            --set-secrets "DASHBOARD_PASSWORD=${SECRET}:latest" \
-            --set-env-vars "DASHBOARD_AUTH_REQUIRED=1,SUPPORT_CONTACT=${SUPPORT_CONTACT:-この画面を共有した担当者}"
+            --set-secrets "DASHBOARD_PASSWORD=${SECRET}:latest,RECOMMEND_OPS_TOKEN=RECOMMEND_OPS_TOKEN:latest" \
+            --set-env-vars "DASHBOARD_AUTH_REQUIRED=1,SUPPORT_CONTACT=${SUPPORT_CONTACT:-この画面を共有した担当者},RECOMMEND_BASE_URL=${RECOMMEND_BASE_URL}"
 
       - name: URL を出す
         run: |

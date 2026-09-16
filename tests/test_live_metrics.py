@@ -135,3 +135,70 @@ def test_ops_status_vocabulary_matches_rec_db():
     """
     assert lm.OPS_AUTH_ERROR == rec_db.OPS_AUTH_ERROR
     assert lm.TOKEN_ENV == rec_db.OpsStateClient.TOKEN_ENV
+    assert lm.OPS_TOKEN_MISSING == rec_db.OPS_TOKEN_MISSING
+
+
+def test_normalize_ops_state_reads_nested_production_shape():
+    payload = {"snapshot": {"built_at": "2026-10-16T04:00:00+00:00", "ok": True, "decision_table_size": 37},
+               "rules": {"built_at": "2026-10-16T04:00:00+00:00", "count_certain_up": 3, "count_certain_down": 1,
+                         "gamma": 0.7, "candidate_coverage": 0.4, "consistency_level": 0.9},
+               "phase": {"current": "SIMILARITY", "judged": "DRSA", "quality_gate_passed": False,
+                         "gate_detail": {"size": True, "rules": True, "gamma": True, "coverage": False}}}
+    s = lm.normalize_ops_state(payload)
+    assert (s["gamma"], s["n_certain_rules"], s["rule_coverage"]) == (0.7, 4, 0.4)
+    assert s["latency_p95_ms"] is None                      # 無いものは None。0 にしない
+    assert (s["phase_current"], s["decision_table_size"]) == ("SIMILARITY", 37)
+    assert s["gate_detail"] == {"size": True, "rules": True, "gamma": True, "coverage": False}  # T-9: 個別に読める
+
+
+def test_normalize_ops_state_keeps_flat_synth_shape():
+    s = lm.normalize_ops_state({"gamma": 0.62, "n_certain_rules": 5, "rule_coverage": 0.58, "latency_p95_ms": 320})
+    assert (s["gamma"], s["n_certain_rules"], s["rule_coverage"], s["latency_p95_ms"]) == (0.62, 5, 0.58, 320)
+    assert s["phase_current"] is None and s["gate_detail"] is None
+
+
+def test_gate_detail_signal_lists_failed_items_individually():
+    sig = lm.gate_detail_signal(lm.normalize_ops_state(
+        {"phase": {"quality_gate_passed": False,
+                   "gate_detail": {"size": True, "rules": False, "gamma": True, "coverage": False}}}))
+    assert "rules" in sig.value and "coverage" in sig.value and "size" not in sig.value
+    assert sig.level == lm.YELLOW
+
+
+def test_ops_state_signals_distinguish_token_missing():
+    sigs = lm.ops_state_signals(None, rec_db.OPS_TOKEN_MISSING)
+    assert all(s.value == "未設定" for s in sigs)
+    assert all("RECOMMEND_OPS_TOKEN" in s.detail for s in sigs)
+    assert lm.OPS_TOKEN_MISSING == rec_db.OPS_TOKEN_MISSING
+
+
+def test_synth_ops_state_is_production_shaped():
+    s = lm.normalize_ops_state(synth.ops_state(recommender_dead=False))
+    assert s["phase_current"] == "DRSA" and s["decision_table_size"] == 42 and s["n_certain_rules"] == 5
+
+
+def test_normalize_ops_state_reads_nested_latency_ms_p95():
+    """本番は latency_ms.p95（入れ子）で返す（推薦側 10-observability.md §2）。"""
+    s = lm.normalize_ops_state({"latency_ms": {"p50": 38, "p95": 112, "budget": 600}})
+    assert s["latency_p95_ms"] == 112
+    # フラットな latency_p95_ms が来ていればそちらを優先する
+    s2 = lm.normalize_ops_state({"latency_p95_ms": 320, "latency_ms": {"p95": 112}})
+    assert s2["latency_p95_ms"] == 320
+
+
+def test_normalize_ops_state_gamma_coverage_fall_back_only_when_none():
+    """トップレベルのキーが存在して値が None のとき、入れ子を見る（dict.get の第2引数では届かない）。"""
+    s = lm.normalize_ops_state({"gamma": None, "rule_coverage": None,
+                                "rules": {"gamma": 0.8, "candidate_coverage": 0.6}})
+    assert s["gamma"] == 0.8
+    assert s["rule_coverage"] == 0.6
+    # latency_p95_ms と同じ挙動（None のときだけ入れ子）
+    s2 = lm.normalize_ops_state({"latency_p95_ms": None, "latency_ms": {"p95": 112}})
+    assert s2["latency_p95_ms"] == 112
+
+
+def test_normalize_ops_state_toplevel_real_value_wins_over_nested():
+    """トップレベルに実値があれば入れ子より優先する（合成データ形式を壊さない）。"""
+    s = lm.normalize_ops_state({"gamma": 0.62, "rule_coverage": 0.58,
+                                "rules": {"gamma": 0.1, "candidate_coverage": 0.2}})
+    assert (s["gamma"], s["rule_coverage"]) == (0.62, 0.58)
