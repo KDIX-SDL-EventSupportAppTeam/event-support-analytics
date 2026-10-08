@@ -94,6 +94,9 @@ class DumpSource:
     """イベント後のダンプディレクトリ。`<name>.parquet` を優先し、無ければ `<name>.csv`。"""
 
     # 文字列で来てもパースしておきたい日時列
+    # 注意: ここでは全部 UTC として読むが、さくら DB（2026-10-08〜）では DB 既定値で入る
+    # created_at / rated_at は JST、アプリが書く checked_in_at は UTC で、途中で揃う可能性もある。
+    # 分析前に docs/specs/recommendation-evaluation/02-data-source.md §2.1 で判定・補正すること。
     _DATETIME_COLS = {"created_at", "checked_in_at", "rated_at"}
 
     def __init__(self, root: str | Path) -> None:
