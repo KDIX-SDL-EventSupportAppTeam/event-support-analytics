@@ -54,6 +54,42 @@
 | `booths` / `categories` / `booth_tags` | `category_id`, `name`, `tag` |
 | `recommendation_scores` | `score`, `rank_in_event`, `interest_match`, `attributes`, `reason_payload` |
 
+### 2.1 タイムスタンプの時刻帯が列によって違う（さくら DB）
+
+**分析の前に必ず読む。** 2026-10-08 に本番 DB を Cloud SQL からさくら（`sutolab_bingo`）へ戻した。
+さくらの MySQL はセッションの時刻帯が **JST（+09:00）** で、プロキシ側でも UTC に揃えていない
+（Cloud SQL は `default_time_zone=+00:00` だった）。そのため同じテーブルの中でも、
+**誰が時刻を書いたか**で時刻帯が違う。
+
+| 書き手 | 時刻帯 | 列 |
+|---|---|---|
+| **DB の既定値**（`DEFAULT CURRENT_TIMESTAMP` / `ON UPDATE`） | **JST** | `booth_ratings.rated_at`、`card_unlock_events.created_at`、`recommendation_scores.created_at`、`gacha_coin_uses.used_at`、`award_votes.created_at`/`updated_at`、`audit_logs.created_at`、`users.created_at`、`user_survey_answers.created_at`、`bingo_cards.created_at`/`updated_at`、`events`/`booths`/`awards`/`organizers.created_at`、各 `updated_at` |
+| **アプリ**（`utcMysqlNow()` などで明示） | **UTC** | `check_ins.checked_in_at`/`synced_at`、`bingo_cells.assigned_at`/`achieved_at`、`events.date_start`/`date_end`、`event_app_access.app_opens_at` ほか |
+
+一覧はサーバーの `db/create-tables.sql` で `DEFAULT CURRENT_TIMESTAMP` の付いた列と、
+アプリが INSERT / UPDATE で明示的に値を入れていない列の突き合わせで作った（2026-10-08 時点。
+例外は `src/routes/v1/ops.ts` が明示更新する `booths.updated_at` のみ）。
+
+**影響する分析**: 評価までの時間（`rated_at - checked_in_at` が約 +9 時間になる）、
+解放から訪問までの時間、時間帯別の集計、イベント時間内での絞り込み。
+
+**`src/rec_db.py` の `DumpSource` は `created_at` / `rated_at` も `utc=True` で読む。**
+JST の列を UTC として解釈するので、補正せずに使うと 9 時間ずれる。
+
+#### 途中で UTC に直った可能性がある — 必ずデータで判定する
+
+プロキシの PDO 接続に `SET time_zone = '+00:00'` を入れてもらうよう先生に依頼している（2026-10-08 時点で未反映）。
+反映されると**それ以降の行だけ** UTC になり、同じ列の中で JST と UTC が混ざる。
+列ごとに一律 -9 時間するのではなく、次で切り替わりを確認する。
+
+- `booth_ratings.rated_at` と、対応する `check_ins.checked_in_at`（`checkin_id` で結合）の差を見る。
+  評価はチェックイン直後に付くので、差が **約 +9 時間なら JST**、**数分なら UTC**。差が飛ぶ時点が切り替わり
+- `card_unlock_events.created_at` と、その解放を起こしたチェックインの `checked_in_at` でも同じ判定ができる
+- 確認用: `SELECT @@session.time_zone, NOW(), UTC_TIMESTAMP()` をプロキシ経由で投げ、
+  `NOW()` と `UTC_TIMESTAMP()` が同じなら設定は反映済み
+
+補正後は全列を UTC に揃えてから、AGENTS.md の規則どおり JST に変換して日付判定する。
+
 ### 取得してはならないもの
 
 `users.email` / `users.password_hash`。**分析に不要であり、渡さないことで事故を防ぐ**
