@@ -21,6 +21,10 @@ SERVICE="${SERVICE:-protofes-dashboard}"
 SECRET="${SECRET:-dashboard-password}"
 # 不具合レポートの送り先として画面に出す文言（連絡先を入れておくと親切）
 SUPPORT_CONTACT="${SUPPORT_CONTACT:-この画面を共有した担当者}"
+# 本番データの読み口（GCP 上の読み取り専用ラッパー deploy/gcp-readonly-proxy）と対象イベント
+READONLY_PROXY_URL="${READONLY_PROXY_URL:-https://event-support-readonly-proxy-953810811347.asia-northeast1.run.app}"
+RECOMMEND_BASE_URL="${RECOMMEND_BASE_URL:-https://event-support-recommend-2vfu7wrxxa-an.a.run.app}"
+REC_EVENT_ID="${REC_EVENT_ID:?REC_EVENT_ID（表示するイベントID）を指定すること}"
 
 cd "$(dirname "$0")/.."
 
@@ -70,8 +74,8 @@ gcloud run deploy "${SERVICE}" \
   --min-instances 0 \
   --max-instances 3 \
   --session-affinity \
-  --set-secrets "DASHBOARD_PASSWORD=${SECRET}:latest" \
-  --set-env-vars "DASHBOARD_AUTH_REQUIRED=1,SUPPORT_CONTACT=${SUPPORT_CONTACT}"
+  --set-secrets "DASHBOARD_PASSWORD=${SECRET}:latest,REC_READONLY_PROXY_KEY=RECOMMEND_READONLY_PROXY_KEY:latest,RECOMMEND_OPS_TOKEN=RECOMMEND_OPS_TOKEN:latest" \
+  --set-env-vars "DASHBOARD_AUTH_REQUIRED=1,SUPPORT_CONTACT=${SUPPORT_CONTACT},REC_SOURCE=sql,REC_READONLY_PROXY_URL=${READONLY_PROXY_URL},REC_EVENT_ID=${REC_EVENT_ID},RECOMMEND_BASE_URL=${RECOMMEND_BASE_URL}"
 
 echo
 echo "URL: $(gcloud run services describe "${SERVICE}" --region "${REGION}" --project "${PROJECT}" --format='value(status.url)')"
