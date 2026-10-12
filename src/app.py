@@ -64,7 +64,13 @@ def main() -> None:
                 url_path="post"),
     ]
     st.sidebar.markdown("### 画面")
-    st.navigation(pages, position="sidebar").run()
+    nav = st.navigation(pages, position="sidebar")
+    # ブラウザのリロードは Streamlit のセッションごと作り直すため合言葉からやり直しになる。
+    # キャッシュだけ捨てて再描画すれば、認証を保ったまま最新のデータを読み直せる。
+    if st.sidebar.button("🔄 データを再読み込み", help="キャッシュを捨てて最新のデータを読み直す（合言葉は不要）"):
+        st.cache_data.clear()
+        st.rerun()
+    nav.run()
 
 
 if __name__ == "__main__":

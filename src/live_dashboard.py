@@ -70,10 +70,10 @@ _SOURCE_HELP = {
 }
 
 
-def source_label(source_kind: str, source_dir: str) -> str:
+def source_label(source_kind: str, source_dir: str, event_id: str | None = None) -> str:
     """**画面に「今どちらを見ているか」を必ず出す。** 取り違えると監視が意味を失う。"""
     if source_kind == "sql":
-        return "本番 MySQL（読み取り専用プロキシ）" + (f" / event={EVENT_ID}" if EVENT_ID else "")
+        return "本番 MySQL（読み取り専用プロキシ）" + (f" / event={event_id}" if event_id else "")
     return f"合成（{source_dir}）"
 
 
@@ -102,7 +102,8 @@ def make_source(source_kind: str, source_dir: str) -> rec_db.Source:
 
 
 @st.cache_data(ttl=REFRESH_SEC)
-def load_tables(source_kind: str, source_dir: str) -> dict[str, pd.DataFrame]:
+def load_tables(source_kind: str, source_dir: str,
+                event_id: str | None = None) -> dict[str, pd.DataFrame]:
     """取得の作法（card_id の解決・イベント絞り込み・スタッフ除外）は rec_db に集約する。
 
     **引数は文字列だけにする。** Source を引数にすると st.cache_data が
@@ -111,7 +112,7 @@ def load_tables(source_kind: str, source_dir: str) -> dict[str, pd.DataFrame]:
     return rec_db.load_tables(
         make_source(source_kind, source_dir),
         ("card_unlock_events", "check_ins", "booth_ratings", "recommendation_scores", "bingo_cells"),
-        event_id=EVENT_ID,
+        event_id=event_id,
     )
 
 
@@ -162,10 +163,10 @@ def signal_card(sig: lm.Signal) -> None:
 
 
 @st.fragment(run_every=REFRESH_SEC)
-def render(source_kind: str, source_dir: str, ops_url: str) -> None:
+def render(source_kind: str, source_dir: str, ops_url: str, event_id: str | None = None) -> None:
     now = pd.Timestamp.now("UTC")
     try:
-        t = load_tables(source_kind, source_dir)
+        t = load_tables(source_kind, source_dir, event_id)
     except FileNotFoundError as exc:
         st.error(f"{exc}\n\n`python src/synth_rec_data.py --out {source_dir}` で合成データを作れます。")
         return
@@ -180,7 +181,7 @@ def render(source_kind: str, source_dir: str, ops_url: str) -> None:
     last_good = st.session_state.get("_ops_last_good")
 
     st.caption(f"最終更新 {to_jst(now):%H:%M:%S} JST　/　{REFRESH_SEC}秒ごとに自動更新"
-               f"　/　データ源: {source_label(source_kind, source_dir)}")
+               f"　/　データ源: {source_label(source_kind, source_dir, event_id)}")
 
     board = lm.signal_board(t["card_unlock_events"], t["check_ins"], t["booth_ratings"], ops, now,
                             ops_status)
@@ -291,9 +292,15 @@ def main() -> None:
                                     value=DEFAULT_RECOMMEND_BASE_URL,
                                     help="既定は環境変数 RECOMMEND_BASE_URL。"
                                          "空なら <ディレクトリ>/ops_state.json を読む。取れなくても他は動く")
+    # 当日のイベントは直前に作られるため、再デプロイせずに画面から切り替えられるようにする。
+    # 空なら絞り込まない（**他のイベントと混ざる**ので本番では必ず入れる）。
+    event_id = st.sidebar.text_input("イベント ID", value=EVENT_ID or "",
+                                     help="既定は環境変数 REC_EVENT_ID。空だと全イベントが混ざる").strip() or None
+    if SOURCE_KIND == "sql" and not event_id:
+        st.sidebar.warning("イベント ID が空です。全イベントのデータが混ざって表示されます。")
     st.sidebar.caption(_SOURCE_HELP[SOURCE_KIND == "sql"])
     sidebar_demo_link(ops_url)
-    render(SOURCE_KIND, source_dir, ops_url)
+    render(SOURCE_KIND, source_dir, ops_url, event_id)
 
 
 if __name__ == "__main__":
