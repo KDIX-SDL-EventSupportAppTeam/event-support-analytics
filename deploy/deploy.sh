@@ -24,7 +24,8 @@ SUPPORT_CONTACT="${SUPPORT_CONTACT:-この画面を共有した担当者}"
 # 本番データの読み口（GCP 上の読み取り専用ラッパー deploy/gcp-readonly-proxy）と対象イベント
 READONLY_PROXY_URL="${READONLY_PROXY_URL:-https://event-support-readonly-proxy-953810811347.asia-northeast1.run.app}"
 RECOMMEND_BASE_URL="${RECOMMEND_BASE_URL:-https://event-support-recommend-2vfu7wrxxa-an.a.run.app}"
-REC_EVENT_ID="${REC_EVENT_ID:?REC_EVENT_ID（表示するイベントID）を指定すること}"
+# 既定の表示イベント。画面のサイドバーで上書きできるので空でもよい
+REC_EVENT_ID="${REC_EVENT_ID:-}"
 
 cd "$(dirname "$0")/.."
 

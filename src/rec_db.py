@@ -374,11 +374,61 @@ def _fetch_order(need: set[str]) -> list[str]:
     return sorted(need - set(deferred)) + deferred
 
 
+#: DB の既定値（`DEFAULT CURRENT_TIMESTAMP`）で入る列。さくら DB ではここだけ JST で保存される（02 §2.1）。
+DB_DEFAULT_TS_COLS = {
+    "booth_ratings": "rated_at",
+    "card_unlock_events": "created_at",
+    "recommendation_scores": "created_at",
+}
+_JST_OFFSET = pd.Timedelta(hours=9)
+
+
+def jst_stored_offset(tables: dict[str, pd.DataFrame], now: pd.Timestamp | None = None) -> pd.Timedelta:
+    """DB 既定値の列が JST で保存されているかを**データで判定**し、引くべきずれを返す（02 §2.1）。
+
+    1. 評価と、その元のチェックイン（UTC）の時刻差の中央値が約 +9 時間なら JST
+    2. 評価が無いときは、DB 既定値の列の最新が「今」より30分以上先なら JST（未来の記録は無い）
+
+    どちらとも言えなければ 0（補正しない）。合成データ・ダンプは UTC なので 0 になる。
+    """
+    ratings, checkins = tables.get("booth_ratings"), tables.get("check_ins")
+    if (ratings is not None and checkins is not None and not ratings.empty and not checkins.empty
+            and {"checkin_id", "rated_at"} <= set(ratings.columns)
+            and {"id", "checked_in_at"} <= set(checkins.columns)):
+        j = ratings[["checkin_id", "rated_at"]].merge(
+            checkins[["id", "checked_in_at"]], left_on="checkin_id", right_on="id")
+        if not j.empty:
+            diff = (pd.to_datetime(j["rated_at"], utc=True)
+                    - pd.to_datetime(j["checked_in_at"], utc=True)).median()
+            return _JST_OFFSET if pd.Timedelta(hours=7) < diff < pd.Timedelta(hours=11) else pd.Timedelta(0)
+    now = now or pd.Timestamp.now("UTC")
+    latest = [pd.to_datetime(tables[n][c], utc=True).max() for n, c in DB_DEFAULT_TS_COLS.items()
+              if n in tables and c in tables[n].columns and not tables[n].empty]
+    latest = [t for t in latest if pd.notna(t)]
+    if latest and max(latest) > now + pd.Timedelta(minutes=30):
+        return _JST_OFFSET
+    return pd.Timedelta(0)
+
+
+def align_db_default_timestamps(tables: dict[str, pd.DataFrame],
+                                now: pd.Timestamp | None = None) -> dict[str, pd.DataFrame]:
+    """JST 保存の列を UTC に直す。**画面はこれを通した後の時刻だけを使う**（AGENTS.md「間違えやすい点」）。"""
+    offset = jst_stored_offset(tables, now)
+    if offset == pd.Timedelta(0):
+        return tables
+    out = dict(tables)
+    for name, col in DB_DEFAULT_TS_COLS.items():
+        df = out.get(name)
+        if df is not None and col in df.columns and not df.empty:
+            out[name] = df.assign(**{col: pd.to_datetime(df[col], utc=True) - offset})
+    return out
+
+
 def load_tables(source: Source, names: tuple[str, ...] | None = None, *,
                 event_id: str | None = None, exclude_staff: bool = True) -> dict[str, pd.DataFrame]:
     """指標・画面が使う形までまとめて整えて返す。**取得の作法はここに集約する。**
 
-    1. 必要なテーブルを読む
+    1. 必要なテーブルを読む（JST 保存の列は UTC に直す。`align_db_default_timestamps`）
     2. `card_id` しか持たないテーブルに `user_id` / `event_id` を付ける
     3. イベントで絞る（指定時）
     4. `role <> 'participant'` を除外する
@@ -397,6 +447,7 @@ def load_tables(source: Source, names: tuple[str, ...] | None = None, *,
     need |= {"users"} if exclude_staff else set()
 
     tables = {n: source.table(n) for n in _fetch_order(need)}
+    tables = align_db_default_timestamps(tables)
 
     cards = tables.get("bingo_cards")
     if cards is not None:
