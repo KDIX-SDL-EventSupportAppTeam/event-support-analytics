@@ -19,6 +19,15 @@ class CheckSql(unittest.TestCase):
         self.ok("SELECT `card_id`, `booth_id`, `source` FROM `bingo_cells`")
         self.ok("SELECT `id`, `created_at` FROM `recommendation_scores`;")
 
+    def test_parent_scoped_bingo_cells(self):
+        sub = " WHERE `card_id` IN (SELECT `id` FROM `bingo_cards` WHERE `event_id` = ?)"
+        self.ok("SELECT `card_id`, `booth_id`, `source` FROM `bingo_cells`" + sub, EID)
+        self.ng("SELECT `card_id` FROM `bingo_cells`" + sub)                     # params 不足
+        self.ng("SELECT `id` FROM `check_ins`" + sub, EID)                        # 組み合わせ外の表
+        self.ng("SELECT `card_id` FROM `bingo_cells` WHERE `card_id` IN (SELECT `id` FROM `users` WHERE `event_id` = ?)", EID)
+        self.ng("SELECT `card_id` FROM `bingo_cells` WHERE `booth_id` IN (SELECT `id` FROM `bingo_cards` WHERE `event_id` = ?)", EID)
+        self.ng("SELECT `card_id` FROM `bingo_cells` WHERE `card_id` IN (SELECT `email` FROM `users` WHERE `event_id` = ?)", EID)
+
     def test_write_and_ddl_rejected(self):
         for s in ["UPDATE users SET role='manager'", "DELETE FROM check_ins", "DROP TABLE users",
                   "INSERT INTO booths VALUES (1)", "SELECT `id` FROM `users`; DELETE FROM users",

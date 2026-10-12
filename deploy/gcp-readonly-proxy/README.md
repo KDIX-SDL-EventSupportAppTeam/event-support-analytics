@@ -21,9 +21,12 @@ python3 -I test_main.py
 ## デプロイ（手動。CD は無い）
 
 ```bash
-gcloud run deploy event-support-readonly-proxy --source . --region asia-northeast1 --allow-unauthenticated --max-instances 2 --memory 256Mi \
+gcloud run deploy event-support-readonly-proxy --source . --region asia-northeast1 --allow-unauthenticated --min-instances 1 --max-instances 2 --memory 256Mi \
   --set-env-vars UPSTREAM_PROXY_URL=https://sutolab.sakura.ne.jp/bingo/query/index.php \
   --set-secrets READONLY_PROXY_KEY=RECOMMEND_READONLY_PROXY_KEY:latest,UPSTREAM_PROXY_KEY=SAKURA_PROXY_KEY:latest
 ```
+
+`--min-instances 1` は、0 だと5分おきのスナップショットのたびにコールドスタート（約9秒）が乗り、
+推薦エンジン側の1本20秒のタイムアウトに近づくため（2026-10-12 実測で取得全体 24 秒）。
 
 実行サービスアカウントには `RECOMMEND_READONLY_PROXY_KEY` の `roles/secretmanager.secretAccessor` が要る。

@@ -18,7 +18,9 @@ Cloud Run 上のこのサービスが既存の全権の口（/bingo/query/index.
 機械的に組み立てる次の形だけ:
 
     SELECT `c1`, `c2`, ... FROM `table` [WHERE `event_id` = ?]
+    SELECT `c1`, ... FROM `bingo_cells` WHERE `card_id` IN (SELECT `id` FROM `bingo_cards` WHERE `event_id` = ?)
 
+後者は event_id 列を持たない表を親の event_id で絞る形で、PARENT_SCOPE に書いた組み合わせだけ通す。
 全権の鍵はこのサービスの中にだけ置き、呼び出し側には読み取り専用の鍵だけを配る。
 """
 
@@ -50,10 +52,17 @@ ALLOWED: dict[str, frozenset[str] | None] = {
     "users": frozenset({"id", "role"}),
 }
 
+# event_id 列を持たない表 → (結合列, 親の表)。この組み合わせのサブクエリだけ通す
+PARENT_SCOPE: dict[str, tuple[str, str]] = {
+    "bingo_cells": ("card_id", "bingo_cards"),
+}
+
 _IDENT = r"`([A-Za-z_][A-Za-z0-9_]*)`"
 _SELECT_RE = re.compile(
-    rf"^SELECT\s+(?P<cols>{_IDENT}(?:\s*,\s*{_IDENT})*)\s+FROM\s+{_IDENT}"
-    rf"(?:\s+WHERE\s+`event_id`\s*=\s*\?)?$",
+    rf"^SELECT\s+(?P<cols>{_IDENT}(?:\s*,\s*{_IDENT})*)\s+FROM\s+`(?P<table>[A-Za-z_][A-Za-z0-9_]*)`"
+    rf"(?:\s+WHERE\s+(?:`event_id`\s*=\s*\?"
+    rf"|`(?P<fk>[A-Za-z_][A-Za-z0-9_]*)`\s+IN\s*\(\s*SELECT\s+`id`\s+FROM\s+"
+    rf"`(?P<parent>[A-Za-z_][A-Za-z0-9_]*)`\s+WHERE\s+`event_id`\s*=\s*\?\s*\)))?$",
     re.IGNORECASE,
 )
 _COL_RE = re.compile(_IDENT)
@@ -68,12 +77,14 @@ def check_sql(sql: str, params: list) -> str | None:
     if not m:
         return "shape"
     cols = _COL_RE.findall(m.group("cols"))
-    table = m.groups()[-1]
+    table = m.group("table")
     if table not in ALLOWED:
         return "table"
     allowed_cols = ALLOWED[table]
     if allowed_cols is not None and not set(cols) <= allowed_cols:
         return "column"
+    if m.group("fk") is not None and PARENT_SCOPE.get(table) != (m.group("fk"), m.group("parent")):
+        return "scope"
     if len(params) != s.count("?"):
         return "params"
     if not all(isinstance(p, (str, int, float)) and not isinstance(p, bool) for p in params):
