@@ -418,3 +418,260 @@ def _arm_of(attributes) -> str | None:
         arm = attributes.get("arm")
         return str(arm) if arm is not None else None
     return None
+
+
+# --- 画面5 推薦エンジンの中身 — 運営画面では見えない「いま何が動いているか」 -----------
+#
+# 読み手はエンジニア。対応行動つきの信号機（画面1）とは別のタブに置き、
+# 「どのアルゴリズムが動いていて、次まであとどれだけか」「決定表はどう育っているか」
+# 「推薦は当たっているか」を説明つきで出す。**A/B の群別比較はここにも書かない**（03 §5）。
+
+#: 推薦の段階。推薦側の自動モードは「アンケート → ランダム → DRSA」（推薦側 ADR 0010）。
+#: 契約上の phase は COVERAGE のままでも、中身はランダム期である。
+STAGES = (
+    ("PRESURVEY", "事前アンケート", "来場者の最初のカード。アンケートの関心だけで並べる"),
+    ("COVERAGE", "ランダム期", "評価がまだ少ないので、候補を一様にランダムで選んで評価データを集める"),
+    ("DRSA", "DRSA 期", "集めた評価から「この条件なら高評価」という規則を学び、規則で選ぶ"),
+)
+
+#: 品質ゲートのしきい値。**推薦側 settings.py の既定値の写し**（`/ops/state` は値を返さないため）。
+#: 決定表の件数だけは `/ops/state` の config.phase_drsa_min を正とする。
+GATE_DEFAULTS = {"rules": 2, "gamma": 0.5, "coverage": 0.5}
+
+#: 条件属性の値の意味（推薦側 features.py）。
+PREFERENCE_LABELS = {0: "0 関心なし", 1: "1 関心あり", 2: "2 第1希望", 3: "3 第1希望+訪問"}
+AFFINITY_LABELS = {1: "1 低評価と同ジャンル", 2: "2 情報なし", 3: "3 高評価と同ジャンル"}
+
+#: 高評価・低評価の線（推薦側 settings.high_rating_ratio / low_rating_ratio）。
+HIGH_RATIO, LOW_RATIO = 0.75, 0.25
+
+
+def _json(v) -> dict:
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, str):
+        import json
+
+        try:
+            out = json.loads(v)
+            return out if isinstance(out, dict) else {}
+        except (ValueError, TypeError):
+            return {}
+    return {}
+
+
+def rating_pace(booth_ratings: pd.DataFrame, now: pd.Timestamp, window_min: int = 30) -> float | None:
+    """直近 window 分の評価の増え方（件/分）。決定表は評価1件で1行増えるので、その増え方の目安。"""
+    if booth_ratings.empty:
+        return None
+    return len(_window(booth_ratings, "rated_at", now, window_min)) / window_min
+
+
+def engine_overview(ops_state: dict | None, booth_ratings: pd.DataFrame, now: pd.Timestamp) -> dict | None:
+    """いまの段階・DRSA までの距離・品質ゲートの各条件・セレンディピティ規則の状態。
+
+    `/ops/state` が取れないときは None（画面側は「取得不能」を出す）。
+    """
+    if not isinstance(ops_state, dict):
+        return None
+    norm = normalize_ops_state(ops_state) or {}
+    phase = ops_state.get("phase") if isinstance(ops_state.get("phase"), dict) else {}
+    rules = ops_state.get("rules") if isinstance(ops_state.get("rules"), dict) else {}
+    config = ops_state.get("config") if isinstance(ops_state.get("config"), dict) else {}
+    stats = phase.get("gate_stats") if isinstance(phase.get("gate_stats"), dict) else {}
+    gate = norm.get("gate_detail") or {}
+    ser = ops_state.get("ser") if isinstance(ops_state.get("ser"), dict) else {}
+
+    size = norm.get("decision_table_size")
+    need = config.get("phase_drsa_min") or 60
+    pace = rating_pace(booth_ratings, now)
+    remaining = max(0, need - size) if size is not None else None
+    eta_min = (remaining / pace) if remaining and pace else (0 if remaining == 0 else None)
+
+    gamma = norm.get("gamma")
+    coverage = norm.get("rule_coverage")
+    effective = stats.get("rules")
+    gate_items = [
+        {"key": "size", "label": "決定表の件数", "value": size, "threshold": need, "ok": gate.get("size"),
+         "explain": "評価が付いた訪問の数。少ないと規則が偶然に左右される"},
+        {"key": "rules", "label": "有効な確実規則", "value": effective, "threshold": GATE_DEFAULTS["rules"],
+         "ok": gate.get("rules"),
+         "explain": f"確信度が基準率より {stats.get('min_lift', 0.1):.0%} 以上高い規則の本数。"
+                    "これが無いと DRSA はランダムと同じ"},
+        {"key": "gamma", "label": "近似の質 γ", "value": gamma, "threshold": GATE_DEFAULTS["gamma"],
+         "ok": gate.get("gamma"), "explain": "決定表を矛盾なく説明できている割合"},
+        {"key": "coverage", "label": "規則の被覆率", "value": coverage, "threshold": GATE_DEFAULTS["coverage"],
+         "ok": gate.get("coverage"), "explain": "規則が当てはまる候補の割合。低いと大半が判断保留になる"},
+    ]
+
+    used = ser.get("used") if isinstance(ser.get("used"), dict) else {}
+    return {
+        "current": norm.get("phase_current"),
+        "judged": norm.get("phase_judged"),
+        "gate_passed": norm.get("quality_gate_passed"),
+        "size": size,
+        "need": need,
+        "remaining": remaining,
+        "pace_per_min": pace,
+        "eta_min": eta_min,
+        "gate_items": gate_items,
+        "rules": {
+            "certain_up": rules.get("count_certain_up"),
+            "certain_down": rules.get("count_certain_down"),
+            "effective": effective,
+            "base_rate_high": rules.get("base_rate_high"),
+            "base_rate_low": rules.get("base_rate_low"),
+            "built_at": rules.get("built_at"),
+        },
+        "ser": {
+            "active": ser.get("active"),
+            "count": ser.get("count"),
+            "rows": ser.get("mismatch_rows"),
+            "min_rows": ser.get("min_rows"),
+            "rules": ser.get("rules") or [],
+        },
+        "by_strategy": used.get("by_strategy") or {},
+        "slots": used.get("slots"),
+        "mismatch_slots": used.get("mismatch_slots"),
+        "experiment_active": (ops_state.get("experiment") or {}).get("split_active"),
+        "enabled_attributes": config.get("enabled_attributes") or [],
+        "engine_version": ops_state.get("engine_version"),
+    }
+
+
+def decision_table(recommendation_scores: pd.DataFrame, booth_ratings: pd.DataFrame,
+                   check_ins: pd.DataFrame) -> pd.DataFrame:
+    """評価1件 = 1行の決定表（の近似）。条件属性 + 評価（高/中/低）。
+
+    推薦エンジンは「訪問時点で知り得た情報」で条件属性を作り直すが、こちらは
+    **その訪問より前に出た推薦スコアの属性**で代用する（同じ features.py の値）。
+    該当スコアが無い評価は条件が空になり、表から落ちる。
+    """
+    cols = ["user_id", "booth_id", "rating", "scale", "rated_at", "preference_match",
+            "rating_affinity", "decision"]
+    if booth_ratings.empty or recommendation_scores.empty:
+        return pd.DataFrame(columns=cols)
+    s = recommendation_scores[["user_id", "booth_id", "attributes", "created_at"]].copy()
+    cond = s["attributes"].apply(lambda a: _json(a).get("condition") or {})
+    s["preference_match"] = cond.apply(lambda c: c.get("preference_match"))
+    s["rating_affinity"] = cond.apply(lambda c: c.get("rating_affinity"))
+    s = s.dropna(subset=["preference_match", "rating_affinity"])
+    s["created_at"] = pd.to_datetime(s["created_at"], utc=True)
+
+    r = booth_ratings[["checkin_id", "user_id", "booth_id", "rating", "scale", "rated_at"]].copy()
+    r["rated_at"] = pd.to_datetime(r["rated_at"], utc=True)
+    # 訪問時刻はチェックインの時刻（UTC）。無ければ評価時刻で代用する
+    if not check_ins.empty and {"id", "checked_in_at"} <= set(check_ins.columns):
+        visit = check_ins[["id", "checked_in_at"]].rename(columns={"id": "checkin_id"})
+        r = r.merge(visit, on="checkin_id", how="left")
+        r["visit_at"] = pd.to_datetime(r["checked_in_at"], utc=True).fillna(r["rated_at"])
+    else:
+        r["visit_at"] = r["rated_at"]
+
+    j = r.merge(s, on=["user_id", "booth_id"], how="inner")
+    before = j[j["created_at"] <= j["visit_at"]]
+    # 訪問前のスコアがあればその最新、無ければ最古（＝最初に出た属性）を使う
+    pick = before.sort_values("created_at").groupby("checkin_id").tail(1)
+    rest = j[~j["checkin_id"].isin(pick["checkin_id"])].sort_values("created_at").groupby("checkin_id").head(1)
+    out = pd.concat([pick, rest])
+    if out.empty:
+        return pd.DataFrame(columns=cols)
+    ratio = pd.to_numeric(out["rating"], errors="coerce") / pd.to_numeric(out["scale"], errors="coerce")
+    out["decision"] = np.select([ratio >= HIGH_RATIO, ratio <= LOW_RATIO], ["高評価", "低評価"], "中")
+    out["preference_match"] = out["preference_match"].astype(int)
+    out["rating_affinity"] = out["rating_affinity"].astype(int)
+    return out[cols].sort_values("rated_at").reset_index(drop=True)
+
+
+def decision_table_grid(table: pd.DataFrame) -> pd.DataFrame:
+    """条件の組合せごとの件数と高評価率。DRSA の規則はこの表の「偏り」から生まれる。"""
+    if table.empty:
+        return pd.DataFrame(columns=["preference_match", "rating_affinity", "n", "high_rate"])
+    g = table.groupby(["preference_match", "rating_affinity"])
+    return g.agg(n=("decision", "size"),
+                 high_rate=("decision", lambda d: (d == "高評価").mean())).reset_index()
+
+
+def recommendation_outcomes(recommendation_scores: pd.DataFrame, check_ins: pd.DataFrame,
+                            booth_ratings: pd.DataFrame) -> dict:
+    """推薦は当たっているか。**全体と関心一致度別だけ**を出す（群別＝A/B の比較はしない, 03 §5）。
+
+    - 訪問率: カードに載せた（was_assigned=1）ブースのうち、その人が後で訪れた割合
+    - 高評価率: 推薦から訪れたブースの評価のうち高評価の割合。カード外の訪問と並べて見る
+    """
+    empty = {"n_assigned": 0, "visit_rate": None, "by_match": pd.DataFrame(),
+             "rec_high_rate": None, "off_high_rate": None, "n_rec_rated": 0, "n_off_rated": 0}
+    if recommendation_scores.empty:
+        return empty
+    a = recommendation_scores[pd.to_numeric(recommendation_scores["was_assigned"], errors="coerce") == 1]
+    a = a.sort_values("created_at").drop_duplicates(["user_id", "booth_id"])
+    if a.empty:
+        return empty
+    visited = set(zip(check_ins["user_id"], check_ins["booth_id"])) if not check_ins.empty else set()
+    a = a.assign(visited=[(u, b) in visited for u, b in zip(a["user_id"], a["booth_id"])])
+
+    by_match = (a.groupby("interest_match")
+                .agg(提示=("visited", "size"), 訪問=("visited", "sum"), 訪問率=("visited", "mean"))
+                .reindex(["MATCH", "PARTIAL", "MISMATCH"]).dropna(how="all").reset_index())
+
+    rec_pairs = set(zip(a["user_id"], a["booth_id"]))
+    rec_high = off_high = None
+    n_rec = n_off = 0
+    if not booth_ratings.empty:
+        r = booth_ratings.copy()
+        ratio = pd.to_numeric(r["rating"], errors="coerce") / pd.to_numeric(r["scale"], errors="coerce")
+        r["high"] = ratio >= HIGH_RATIO
+        is_rec = pd.Series([(u, b) in rec_pairs for u, b in zip(r["user_id"], r["booth_id"])], index=r.index)
+        n_rec, n_off = int(is_rec.sum()), int((~is_rec).sum())
+        rec_high = float(r.loc[is_rec, "high"].mean()) if n_rec else None
+        off_high = float(r.loc[~is_rec, "high"].mean()) if n_off else None
+    return {
+        "n_assigned": len(a),
+        "visit_rate": float(a["visited"].mean()),
+        "by_match": by_match,
+        "rec_high_rate": rec_high,
+        "off_high_rate": off_high,
+        "n_rec_rated": n_rec,
+        "n_off_rated": n_off,
+    }
+
+
+def participant_overview(check_ins: pd.DataFrame, booth_ratings: pd.DataFrame,
+                         now: pd.Timestamp, active_min: int = 30) -> dict:
+    """参加者の動き。来場者数・いま動いている人・1人あたりの訪問数。"""
+    if check_ins.empty:
+        return {"n_users": 0, "n_active": 0, "visits_per_user": pd.Series(dtype=int),
+                "n_checkins": 0, "n_ratings": len(booth_ratings)}
+    per_user = check_ins.groupby("user_id").size()
+    active = _window(check_ins, "checked_in_at", now, active_min)["user_id"].nunique()
+    return {"n_users": int(per_user.size), "n_active": int(active), "visits_per_user": per_user,
+            "n_checkins": len(check_ins), "n_ratings": len(booth_ratings)}
+
+
+def booth_popularity(check_ins: pd.DataFrame, booth_ratings: pd.DataFrame,
+                     booths: pd.DataFrame | None = None, categories: pd.DataFrame | None = None) -> pd.DataFrame:
+    """ブース別の訪問数・平均評価。名前とジャンルが引ければ付ける。"""
+    if check_ins.empty:
+        return pd.DataFrame(columns=["ブース", "ジャンル", "訪問", "評価数", "平均評価"])
+    v = check_ins.groupby("booth_id").size().rename("訪問")
+    if not booth_ratings.empty:
+        rr = booth_ratings.assign(r=pd.to_numeric(booth_ratings["rating"], errors="coerce"))
+        rt = rr.groupby("booth_id").agg(評価数=("r", "size"), 平均評価=("r", "mean"))
+    else:
+        rt = pd.DataFrame(columns=["評価数", "平均評価"])
+    out = pd.DataFrame(v).join(rt).reset_index()
+    name = out["booth_id"].astype(str).str[:8]
+    genre = pd.Series("—", index=out.index)
+    if booths is not None and not booths.empty and "id" in booths.columns:
+        b = booths.set_index("id")
+        if "name" in b.columns:
+            name = out["booth_id"].map(b["name"]).fillna(name)
+        if "category_id" in b.columns:
+            cat = out["booth_id"].map(b["category_id"])
+            if categories is not None and not categories.empty and {"id", "name"} <= set(categories.columns):
+                cat = cat.map(categories.set_index("id")["name"])
+            genre = cat.fillna("—")
+    out.insert(0, "ブース", name)
+    out.insert(1, "ジャンル", genre)
+    out["評価数"] = out["評価数"].fillna(0).astype(int)
+    return out.drop(columns="booth_id").sort_values("訪問", ascending=False).reset_index(drop=True)

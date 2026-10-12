@@ -183,6 +183,17 @@ def render(source_kind: str, source_dir: str, ops_url: str, event_id: str | None
     st.caption(f"最終更新 {to_jst(now):%H:%M:%S} JST　/　{REFRESH_SEC}秒ごとに自動更新"
                f"　/　データ源: {source_label(source_kind, source_dir, event_id)}")
 
+    tab_signal, tab_engine, tab_people = st.tabs(["🚦 信号機", "🧠 推薦エンジンの中身", "👥 参加者とブース"])
+    with tab_signal:
+        _signal_tab(t, ops, ops_status, now, last_good)
+    with tab_engine:
+        engine_tab(t, ops, ops_status, now)
+    with tab_people:
+        people_tab(t, booth_names(source_kind, source_dir), now)
+
+
+def _signal_tab(t, ops, ops_status, now, last_good) -> None:
+    """画面1〜4（信号機・時系列・異常検知・実験の進捗）。当日の判断はこのタブだけで足りる。"""
     board = lm.signal_board(t["card_unlock_events"], t["check_ins"], t["booth_ratings"], ops, now,
                             ops_status)
     worst = lm.worst_level(board)
@@ -261,6 +272,255 @@ def render(source_kind: str, source_dir: str, ops_url: str, event_id: str | None
             pc[i].metric(f"{arm} 枠の提示数", n)
         pc[-1].metric("分割対象の参加者数", prog["n_participants"])
         st.caption(f"分割発動: {to_jst(prog['first_split_at']):%H:%M} JST")
+
+
+@st.cache_data(ttl=600)
+def booth_names(source_kind: str, source_dir: str) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    """ブース名とジャンル名。**取れなくても画面は止めない**（ID の先頭8文字で代用する）。"""
+    src = make_source(source_kind, source_dir)
+    out = []
+    for name in ("booths", "categories"):
+        try:
+            out.append(src.table(name))
+        except Exception:  # noqa: BLE001 - 名前は飾り。取得失敗で監視を落とさない
+            out.append(None)
+    return out[0], out[1]
+
+
+_STRATEGY_HELP = {
+    "RANDOM": "ランダムに選んだマス（ランダム期の基本）",
+    "DRSA": "学んだ規則で選んだマス",
+    "SER": "関心外だけど刺さりそうなブースを規則で選んだマス（セレンディピティ）",
+    "EXPLORE": "関心外からあえてランダムに選んだマス（偏りを防ぐ探索）",
+}
+
+
+def _stage_html(current: str | None) -> str:
+    ids = [sid for sid, _, _ in lm.STAGES]
+    cur_i = ids.index(current) if current in ids else -1
+    boxes = []
+    for i, (sid, label, desc) in enumerate(lm.STAGES):
+        if i < cur_i:
+            style, mark = "background:#e2e8f0;color:#475569;border:1px solid #cbd5e1", "✓ 済"
+        elif i == cur_i:
+            style, mark = "background:#4f46e5;color:#fff;border:2px solid #4338ca", "▶ いまここ"
+        else:
+            style, mark = "background:transparent;color:#64748b;border:1px dashed #94a3b8", "次"
+        boxes.append(f'<div style="flex:1;min-width:150px;padding:10px 12px;border-radius:10px;{style}">'
+                     f'<div style="font-size:.75rem;opacity:.85">{mark}</div>'
+                     f'<div style="font-weight:700;font-size:1.05rem">{label}</div>'
+                     f'<div style="font-size:.8rem;opacity:.9">{desc}</div></div>')
+    arrow = '<div style="align-self:center;color:#94a3b8;font-size:1.2rem">→</div>'
+    return f'<div style="display:flex;gap:8px;flex-wrap:wrap">{arrow.join(boxes)}</div>'
+
+
+def _fmt(v, pct: bool = False) -> str:
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    return f"{v:.0%}" if pct else (f"{v:.2f}" if isinstance(v, float) else str(v))
+
+
+def engine_tab(t: dict[str, pd.DataFrame], ops: dict | None, ops_status: str | None,
+               now: pd.Timestamp) -> None:
+    """推薦エンジンの中身。運営画面では見えない「何が動いていて、次まであとどれだけか」。"""
+    ov = lm.engine_overview(ops, t["booth_ratings"], now)
+    if ov is None:
+        st.warning("推薦エンジンの `/ops/state` が取れていないため、段階と品質ゲートは表示できません。"
+                   "決定表と推薦の調子は DB から出しています。")
+    else:
+        st.markdown("### いま動いているアルゴリズム")
+        st.markdown(_stage_html(ov["current"]), unsafe_allow_html=True)
+
+        failing = [g for g in ov["gate_items"] if g["ok"] is False]
+        if ov["current"] == "DRSA":
+            st.success("**DRSA 期です。** 学んだ規則でマスを選んでいます。")
+        else:
+            parts = []
+            if ov["remaining"]:
+                eta = (f"今のペースで約 **{ov['eta_min']:.0f} 分**"
+                       f"（{to_jst(now + pd.Timedelta(minutes=ov['eta_min'])):%H:%M} 頃）"
+                       if ov["eta_min"] else "直近30分は評価が増えていないので見込みは出せません")
+                parts.append(f"決定表があと **{ov['remaining']} 件**（{eta}）")
+            for g in failing:
+                if g["key"] == "size":
+                    continue
+                parts.append(f"{g['label']}が **{_fmt(g['value'])}**（必要 {_fmt(g['threshold'])} 以上）")
+            msg = "、".join(parts) if parts else "条件はそろっています。次の再構築で切り替わります"
+            st.info(f"**DRSA に上がるには:** {msg}。")
+
+        size, need = ov["size"] or 0, ov["need"]
+        st.progress(min(1.0, size / need) if need else 0.0, text=f"決定表 {size} / {need} 件")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("評価のペース（直近30分）", f"{ov['pace_per_min'] * 60:.0f} 件/時" if ov["pace_per_min"] is not None else "—",
+                  help="決定表は評価1件で1行増える。来場者に評価してもらうほど早く DRSA に上がる")
+        c2.metric("確実規則（上向き / 下向き・リフト条件前）",
+                  f"{_fmt(ov['rules']['certain_up'])} / {_fmt(ov['rules']['certain_down'])}",
+                  help="上向き=「この条件なら高評価」、下向き=「この条件なら低評価」。"
+                       "品質ゲートで数えるのは、このうち確信度が基準率より十分高い「有効な」規則だけ")
+        c3.metric("高評価の基準率", _fmt(ov["rules"]["base_rate_high"], pct=True),
+                  help="決定表全体で高評価が占める割合。規則はこれより確信度が高くて初めて意味がある")
+
+        st.markdown("#### DRSA に上がる条件（品質ゲート：4つすべて満たす）")
+        st.dataframe(pd.DataFrame([{
+            "": "✅" if g["ok"] else ("❌" if g["ok"] is False else "？"),
+            "条件": g["label"],
+            "いま": _fmt(g["value"], pct=g["key"] in ("gamma", "coverage")),
+            "必要": f"{_fmt(g['threshold'], pct=g['key'] in ('gamma', 'coverage'))} 以上",
+            "意味": g["explain"],
+        } for g in ov["gate_items"]]), hide_index=True, width="stretch")
+        st.caption("しきい値は当日変えない（03 §1）。どこで止まっているかの記録が事後の見直しの根拠になる。")
+
+        st.markdown("#### マスの選ばれ方（エンジン起動以降）")
+        bs = ov["by_strategy"]
+        total = sum(bs.values())
+        if total:
+            fig = go.Figure()
+            colors = {"RANDOM": "#94a3b8", "DRSA": "#4f46e5", "SER": "#db2777", "EXPLORE": "#f59e0b"}
+            for k, n in bs.items():
+                fig.add_bar(y=["マス"], x=[n], name=f"{k} {n}", orientation="h", marker_color=colors.get(k),
+                            hovertext=_STRATEGY_HELP.get(k, k))
+            fig.update_layout(barmode="stack", height=120, margin=dict(t=10, b=10, l=10, r=10),
+                              legend=dict(orientation="h"), xaxis_title=None, yaxis_visible=False)
+            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+            st.caption(" / ".join(f"**{k}**: {v}" for k, v in _STRATEGY_HELP.items()))
+        else:
+            st.caption("まだ解放がありません。")
+
+        ser = ov["ser"]
+        rows, min_rows = ser["rows"] or 0, ser["min_rows"] or 0
+        if ser["active"]:
+            st.success(f"セレンディピティ規則（SER）: **稼働中**（{ser['count']} 本）")
+        elif min_rows:
+            st.progress(min(1.0, rows / min_rows),
+                        text=f"セレンディピティ規則（SER）: 関心外ブースの評価 {rows} / {min_rows} 件で作り始める")
+        if ser["rules"]:
+            st.dataframe(pd.DataFrame(ser["rules"]), hide_index=True)
+
+    st.divider()
+    st.markdown("### 決定表（DRSA が学ぶ材料）")
+    st.caption("評価1件が1行。「どんな条件の人が、そのブースをどう評価したか」。"
+               "条件は推薦スコアに記録された属性で再現した近似で、エンジン内部の表と件数がずれることがある。")
+    dt = lm.decision_table(t["recommendation_scores"], t["booth_ratings"], t["check_ins"])
+    if dt.empty:
+        st.write("まだ評価がありません。")
+    else:
+        grid = lm.decision_table_grid(dt)
+        pm = sorted(set(grid["preference_match"]) | {0, 1, 2})
+        ra = [3, 2, 1]
+        z, text = [], []
+        for a in ra:
+            zr, tr = [], []
+            for p_ in pm:
+                hit = grid[(grid["preference_match"] == p_) & (grid["rating_affinity"] == a)]
+                if hit.empty:
+                    zr.append(None)
+                    tr.append("")
+                else:
+                    zr.append(float(hit["high_rate"].iloc[0]))
+                    tr.append(f"高評価 {hit['high_rate'].iloc[0]:.0%}<br>{int(hit['n'].iloc[0])} 件")
+            z.append(zr)
+            text.append(tr)
+        c1, c2 = st.columns([3, 2])
+        with c1:
+            fig = go.Figure(go.Heatmap(
+                z=z, x=[lm.PREFERENCE_LABELS.get(p_, str(p_)) for p_ in pm],
+                y=[lm.AFFINITY_LABELS.get(a, str(a)) for a in ra], text=text, texttemplate="%{text}",
+                colorscale=[[0, "#fee2e2"], [0.5, "#fef9c3"], [1, "#bbf7d0"]], zmin=0, zmax=1,
+                showscale=False, hoverongaps=False))
+            fig.update_layout(height=300, margin=dict(t=30, b=10, l=10, r=10),
+                              xaxis_title="関心との一致（アンケート+行動）", yaxis_title="評価履歴との親和度",
+                              title=dict(text="条件ごとの高評価率", font=dict(size=14)))
+            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+            st.caption("色の濃淡に偏りがあるほど規則が出やすい。件数が5件未満のマスは規則の根拠にならない。")
+        with c2:
+            counts = dt["decision"].value_counts().reindex(["高評価", "中", "低評価"]).fillna(0)
+            fig = go.Figure(go.Bar(x=counts.index, y=counts.values,
+                                   marker_color=["#16a34a", "#94a3b8", "#dc2626"]))
+            fig.update_layout(height=300, margin=dict(t=30, b=10, l=10, r=10),
+                              title=dict(text=f"評価の内訳（{len(dt)} 件）", font=dict(size=14)))
+            st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+        with st.expander("決定表の直近の行"):
+            booths, _ = booth_names(SOURCE_KIND, DEFAULT_SOURCE_DIR)
+            show = dt.tail(20).iloc[::-1].copy()
+            if booths is not None and {"id", "name"} <= set(booths.columns):
+                show["booth_id"] = show["booth_id"].map(booths.set_index("id")["name"]).fillna(show["booth_id"])
+            show["rated_at"] = to_jst(show["rated_at"]).dt.strftime("%H:%M")
+            show["preference_match"] = show["preference_match"].map(lm.PREFERENCE_LABELS)
+            show["rating_affinity"] = show["rating_affinity"].map(lm.AFFINITY_LABELS)
+            st.dataframe(show.drop(columns="user_id").rename(columns={
+                "booth_id": "ブース", "rating": "評価", "scale": "満点", "rated_at": "時刻",
+                "preference_match": "関心との一致", "rating_affinity": "評価履歴との親和度", "decision": "判定"}),
+                hide_index=True, width="stretch")
+
+    st.divider()
+    st.markdown("### 推薦の調子")
+    oc = lm.recommendation_outcomes(t["recommendation_scores"], t["check_ins"], t["booth_ratings"])
+    if not oc["n_assigned"]:
+        st.write("まだカードに載った推薦がありません。")
+        return
+    c1, c2, c3 = st.columns(3)
+    c1.metric("推薦が訪問された割合", _fmt(oc["visit_rate"], pct=True),
+              help=f"カードに載せた {oc['n_assigned']} 件のうち、その人が実際に訪れた割合")
+    c2.metric("推薦から訪れた人の高評価率", _fmt(oc["rec_high_rate"], pct=True),
+              help=f"{oc['n_rec_rated']} 件の評価")
+    delta = (oc["rec_high_rate"] - oc["off_high_rate"]
+             if oc["rec_high_rate"] is not None and oc["off_high_rate"] is not None else None)
+    c3.metric("カード外で訪れた人の高評価率", _fmt(oc["off_high_rate"], pct=True),
+              delta=f"推薦のほうが {delta:+.0%}" if delta is not None else None,
+              help=f"{oc['n_off_rated']} 件の評価。推薦なしで自分で選んだ訪問")
+    n_eval = oc["n_rec_rated"]
+    if n_eval < 20:
+        st.caption(f"評価がまだ {n_eval} 件なので、良し悪しはまだ判断できません（目安 20 件〜）。")
+    elif delta is not None and delta >= 0.05:
+        st.success("推薦から訪れた人のほうが高評価を付けています。**好調です。**")
+    elif delta is not None and delta <= -0.10:
+        st.warning("推薦から訪れた人のほうが評価が低めです。決定表の偏り（上）と、関心外枠の比率を確認してください。")
+    else:
+        st.info("推薦とカード外で高評価率に大きな差はありません。")
+    if not oc["by_match"].empty:
+        st.markdown("##### 関心との一致度別の訪問率")
+        bm = oc["by_match"].copy()
+        bm["interest_match"] = bm["interest_match"].map(
+            {"MATCH": "関心どおり", "PARTIAL": "一部一致", "MISMATCH": "関心外（セレンディピティ枠）"})
+        bm["訪問率"] = bm["訪問率"].map(lambda v: f"{v:.0%}")
+        st.dataframe(bm.rename(columns={"interest_match": "推薦の種類"}), hide_index=True, width="stretch")
+        st.caption("関心外の推薦が訪問されていれば、このアプリの狙い（新しい出会い）が効いている。")
+    st.caption("※ DRSA 枠と COVERAGE 枠の比較（A/B の効果）は当日は出しません（03 §5）。事後分析の画面で見ます。")
+
+
+def people_tab(t: dict[str, pd.DataFrame], names: tuple, now: pd.Timestamp) -> None:
+    """参加者の動きとブースの人気。"""
+    booths, categories = names
+    po = lm.participant_overview(t["check_ins"], t["booth_ratings"], now)
+    c = st.columns(5)
+    c[0].metric("参加者", po["n_users"], help="1回以上チェックインした人（スタッフ除く）")
+    c[1].metric("いま動いている人", po["n_active"], help="直近30分にチェックインした人")
+    c[2].metric("チェックイン", po["n_checkins"])
+    c[3].metric("評価", po["n_ratings"])
+    c[4].metric("1人あたり訪問", f"{po['visits_per_user'].mean():.1f}" if po["n_users"] else "—")
+
+    ci = t["check_ins"]
+    if ci.empty:
+        st.write("まだチェックインがありません。")
+        return
+    c1, c2 = st.columns(2)
+    with c1:
+        per10 = to_jst(pd.to_datetime(ci["checked_in_at"], utc=True)).dt.floor("10min").value_counts().sort_index()
+        fig = go.Figure(go.Bar(x=per10.index, y=per10.values, marker_color="#4f46e5"))
+        fig.update_layout(height=280, margin=dict(t=30, b=10, l=10, r=10),
+                          title=dict(text="10分ごとのチェックイン", font=dict(size=14)), xaxis_title="時刻（JST）")
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+    with c2:
+        vc = po["visits_per_user"].value_counts().sort_index()
+        fig = go.Figure(go.Bar(x=vc.index, y=vc.values, marker_color="#0ea5e9"))
+        fig.update_layout(height=280, margin=dict(t=30, b=10, l=10, r=10),
+                          title=dict(text="1人あたりの訪問数（人数）", font=dict(size=14)), xaxis_title="訪問したブース数")
+        st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
+
+    st.markdown("#### ブース別")
+    pop = lm.booth_popularity(ci, t["booth_ratings"], booths, categories)
+    pop["平均評価"] = pop["平均評価"].map(lambda v: f"{v:.2f}" if pd.notna(v) else "—")
+    st.dataframe(pop, hide_index=True, width="stretch", height=min(600, 38 + 35 * len(pop)))
 
 
 def sidebar_demo_link(base_url: str) -> None:
