@@ -35,6 +35,7 @@ import auth  # noqa: E402
 import dashboard  # noqa: E402
 import live_dashboard  # noqa: E402
 import post_analysis  # noqa: E402
+import page_setup  # noqa: E402
 import report  # noqa: E402
 
 
@@ -53,6 +54,7 @@ def _guarded(screen):
 
 
 def main() -> None:
+    page_setup.apply_style()
     auth.require_password()  # 合言葉が未設定のローカル実行では素通りする
 
     pages = [

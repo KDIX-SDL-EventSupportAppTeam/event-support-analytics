@@ -145,19 +145,78 @@ def demo_url(base_url: str) -> str | None:
     return f"{base}/demo" if base else None
 
 
-def signal_card(sig: lm.Signal) -> None:
-    color = _LEVEL_COLOR[sig.level]
-    value = sig.value
+_LEVEL_WORD = {lm.GREEN: "正常", lm.YELLOW: "注意", lm.RED: "異常", lm.UNKNOWN: "不明"}
+
+#: 信号機の各項目を「何を見ているのか」で3つに分ける。key → (やさしい名前, 何を表すか)
+SIGNAL_GROUPS = (
+    ("推薦エンジンは動いているか", "止まっていたら最優先で対応する。ここが赤なら研究データが取れていない",
+     ("fallback_rate", "recent_unlock_count", "latency_p95")),
+    ("学習データは集まっているか", "評価が集まらないと推薦は賢くならない（ランダムのまま終わる）",
+     ("rating_recovery_rate", "current_phase", "ops_phase", "quality_gate")),
+    ("学んだ規則の質", "DRSA が使う規則がまともか。品質ゲートで止まっていれば正常な動作",
+     ("drsa_quality", "rule_coverage")),
+)
+SIGNAL_INFO = {
+    "fallback_rate": ("推薦が失敗した割合",
+                      "カードを開いたとき推薦エンジンが答えられず、予備の選び方に切り替わった割合。高い＝エンジンが落ちている"),
+    "recent_unlock_count": ("直近30分にマスが開いた回数",
+                            "来場者がチェックインしてマスを開けた数。極端に少ない＝アプリ側が止まっている"),
+    "latency_p95": ("推薦の応答の速さ", "遅いほうから5%の応答時間。1000ms を超えるとタイムアウトして予備に切り替わる"),
+    "rating_recovery_rate": ("評価してもらえた割合", "チェックインのうち★評価まで付いた割合。評価が推薦の学習材料になる"),
+    "current_phase": ("記録上の段階（DB）", "最新の解放に記録された段階と、その時点の決定表の件数"),
+    "ops_phase": ("エンジンが判断した段階", "推薦エンジン本体から取った段階。DB の記録と食い違ったら取り込みを疑う"),
+    "quality_gate": ("DRSA へ上がる条件", "4つの条件（件数・規則数・γ・被覆率）の合否。詳しくは「推薦エンジンの中身」タブ"),
+    "drsa_quality": ("規則の質（γ）", "決定表を矛盾なく説明できている割合と、確実な規則の本数"),
+    "rule_coverage": ("規則が当てはまる割合", "候補のうち規則で判断できたものの割合。低い＝大半が判断保留"),
+}
+
+
+def _format_value(value) -> str:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return "—"
     if isinstance(value, float):
-        value = f"{value:.0%}" if abs(value) <= 1 else f"{value:.2f}"
+        return f"{value:.0%}" if abs(value) <= 1 else f"{value:.2f}"
+    return str(value)
+
+
+def signal_card(sig: lm.Signal) -> None:
+    """信号機の1項目。**ライト／ダークどちらでも読める**よう、背景は状態色を薄く重ねるだけにする。"""
+    color = _LEVEL_COLOR[sig.level]
+    title, what = SIGNAL_INFO.get(sig.key, (sig.label, ""))
+    calm = sig.level == lm.GREEN
+    action = (f'<div class="sig-action sig-calm">対応不要（もし崩れたら: {sig.action}）</div>' if calm
+              else f'<div class="sig-action"><b>→ こうする:</b> {sig.action}</div>')
     st.markdown(
-        f"""<div style="border-left:6px solid {color};background:#f8fafc;border-radius:8px;
-        padding:10px 14px;margin-bottom:8px;">
-        <div style="font-weight:700;font-size:0.95rem;">{_LEVEL_MARK[sig.level]} {sig.label}</div>
-        <div style="font-size:1.6rem;font-weight:800;color:{color};">{value}</div>
-        <div style="color:#475569;font-size:0.85rem;">{sig.detail}</div>
-        <div style="margin-top:4px;font-size:0.9rem;"><b>→ こうする:</b> {sig.action}</div>
+        f"""<div class="sig-card" style="--c:{color}">
+        <div class="sig-head"><span class="sig-title">{title}</span>
+        <span class="sig-pill">{_LEVEL_MARK[sig.level]} {_LEVEL_WORD[sig.level]}</span></div>
+        <div class="sig-what">{what}</div>
+        <div class="sig-value">{_format_value(sig.value)}</div>
+        <div class="sig-detail">{sig.detail}<span class="sig-tech">　指標: {sig.label}</span></div>
+        {action}
         </div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def summary_banner(board: list[lm.Signal]) -> None:
+    """一番上の総合判定。**何が悪いのかを名前で出す**（色だけでは当日読み取れない）。"""
+    worst = lm.worst_level(board)
+    bad = [s for s in board if s.level == lm.RED]
+    warn = [s for s in board if s.level == lm.YELLOW]
+    name = lambda s: SIGNAL_INFO.get(s.key, (s.label,))[0]  # noqa: E731
+    if bad:
+        head, sub = f"異常が {len(bad)} 件あります", "、".join(name(s) for s in bad)
+    elif warn:
+        head, sub = f"注意が {len(warn)} 件あります", "、".join(name(s) for s in warn)
+    else:
+        head, sub = "すべて正常です", "このまま見守ってください"
+    tail = f"　（注意 {len(warn)} 件）" if bad and warn else ""
+    st.markdown(
+        f"""<div class="sig-banner" style="--c:{_LEVEL_COLOR[worst]}">
+        <div class="sig-banner-mark">{_LEVEL_MARK[worst]}</div>
+        <div><div class="sig-banner-head">{head}{tail}</div>
+        <div class="sig-banner-sub">{sub}</div></div></div>""",
         unsafe_allow_html=True,
     )
 
@@ -196,8 +255,7 @@ def _signal_tab(t, ops, ops_status, now, last_good) -> None:
     """画面1〜4（信号機・時系列・異常検知・実験の進捗）。当日の判断はこのタブだけで足りる。"""
     board = lm.signal_board(t["card_unlock_events"], t["check_ins"], t["booth_ratings"], ops, now,
                             ops_status)
-    worst = lm.worst_level(board)
-    st.markdown(f"## {_LEVEL_MARK[worst]} 総合: {worst.upper()}")
+    summary_banner(board)
     if ops_status == rec_db.OPS_AUTH_ERROR:
         # **エンジンの停止と混同させない。** これはこちら側の設定漏れであり、直し方が違う。
         st.error(f"`/ops/state` が認証エラー（401/403）です。`{rec_db.OpsStateClient.TOKEN_ENV}` を確認してください"
@@ -211,10 +269,25 @@ def _signal_tab(t, ops, ops_status, now, last_good) -> None:
         st.info("`/ops/state` を取得できていません（接続失敗・タイムアウト・5xx）。"
                 "該当項目は「取得不能」で表示し、他は動かし続けます（02 §1）。")
 
-    cols = st.columns(2)
-    for i, sig in enumerate(board):
-        with cols[i % 2]:
-            signal_card(sig)
+    by_key = {sig.key: sig for sig in board}
+    shown = set()
+    for title, desc, keys in SIGNAL_GROUPS:
+        sigs = [by_key[k] for k in keys if k in by_key]
+        if not sigs:
+            continue
+        st.markdown(f'<div class="sig-group"><span>{title}</span><small>{desc}</small></div>',
+                    unsafe_allow_html=True)
+        cols = st.columns(min(3, len(sigs)) if len(sigs) != 4 else 2)
+        for i, sig in enumerate(sigs):
+            with cols[i % len(cols)]:
+                signal_card(sig)
+        shown |= set(keys)
+    rest = [sig for sig in board if sig.key not in shown]
+    if rest:
+        cols = st.columns(2)
+        for i, sig in enumerate(rest):
+            with cols[i % 2]:
+                signal_card(sig)
 
     if ops is None and last_good:
         st.caption(f"直近の正常値（{to_jst(last_good['at']):%H:%M:%S} JST 取得）")

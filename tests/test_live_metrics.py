@@ -161,7 +161,7 @@ def test_gate_detail_signal_lists_failed_items_individually():
     sig = lm.gate_detail_signal(lm.normalize_ops_state(
         {"phase": {"quality_gate_passed": False,
                    "gate_detail": {"size": True, "rules": False, "gamma": True, "coverage": False}}}))
-    assert "rules" in sig.value and "coverage" in sig.value and "size" not in sig.value
+    assert "規則数" in sig.value and "被覆率" in sig.value and "件数" not in sig.value
     assert sig.level == lm.YELLOW
 
 

@@ -259,18 +259,27 @@ def phase_signal(state: dict | None) -> Signal:
     cur, judged, size = state["phase_current"], state.get("phase_judged"), state.get("decision_table_size")
     level = GREEN if cur != "COVERAGE" else YELLOW
     return Signal("ops_phase", "エンジンのフェーズ", cur, level,
-                  f"判定={judged} / 決定表={size if size is not None else '未取得'} / snapshot={state.get('snapshot_built_at') or '—'}",
+                  f"判定={judged} / 決定表={size if size is not None else '未取得'} / 最終更新 {_short_time(state.get('snapshot_built_at'))}",
                   "COVERAGE のままなら決定表が育っていない。推薦側 §1 A-1（データ取り込み）を疑う")
+
+
+def _short_time(iso) -> str:
+    """エンジンの ISO 時刻を JST の HH:MM にする。読めなければ —。"""
+    try:
+        return pd.Timestamp(iso).tz_convert("Asia/Tokyo").strftime("%H:%M") + " JST"
+    except (TypeError, ValueError, AttributeError):
+        return "—"
 
 
 def gate_detail_signal(state: dict | None) -> Signal:
     gate = (state or {}).get("gate_detail")
     if not gate:
         return Signal("quality_gate", "品質ゲート（size/rules/gamma/coverage）", "取得不能", UNKNOWN, "取得不能", "/ops/state が取れ次第確認する")
-    failed = [k for k, v in gate.items() if v is False]
+    names = {"size": "件数", "rules": "規則数", "gamma": "γ", "coverage": "被覆率"}
+    failed = [names.get(k, k) for k, v in gate.items() if v is False]
     passed = (state or {}).get("quality_gate_passed")
-    value = "通過" if passed else ("未通過: " + ", ".join(failed) if failed else "未通過")
-    detail = " / ".join(f"{k}={'○' if v else '×' if v is False else '?'}" for k, v in gate.items())
+    value = "通過" if passed else ("未通過: " + "・".join(failed) if failed else "未通過")
+    detail = " / ".join(f"{names.get(k, k)} {'○' if v else '×' if v is False else '?'}" for k, v in gate.items())
     return Signal("quality_gate", "品質ゲート（size/rules/gamma/coverage）", value, GREEN if passed else YELLOW, detail,
                   "どの項目で落ちているかを記録する（事後の PHASE_DRSA_MIN 見直しの根拠）。しきい値は当日変えない")
 
