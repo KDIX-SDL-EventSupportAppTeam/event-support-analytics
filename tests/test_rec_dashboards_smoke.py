@@ -162,7 +162,7 @@ def test_public_board_runs_on_synth(monkeypatch, synth_dir):
     assert not at.exception
     assert not at.error
     html = " ".join(m.value for m in at.markdown)
-    assert "ブース訪問" in html
+    assert "総参加者数" in html and "訪問数/30分" in html
     # spec は JSON で、日本語は \uXXXX にエスケープされている
     charts = " ".join(json.loads(c.proto.spec) and json.dumps(json.loads(c.proto.spec), ensure_ascii=False)
                       for c in at.get("plotly_chart"))
@@ -179,3 +179,14 @@ def test_booth_board_runs_on_synth(monkeypatch, synth_dir):
     assert not at.error
     html = " ".join(m.value for m in at.markdown)
     assert "ベストアイデア賞" in html
+
+
+@pytest.mark.parametrize("layout", ["landscape", "portrait", "phone"])
+def test_public_board_runs_in_every_layout(monkeypatch, synth_dir, layout):
+    """横画面・縦画面・スマホのどの配置でも例外なく描画される（03 §8）。"""
+    monkeypatch.setattr(live_dashboard, "DEFAULT_SOURCE_DIR", str(synth_dir))
+    at = AppTest.from_file(str(SRC / "public_board.py"), default_timeout=60)
+    at.query_params["layout"] = layout
+    at.run()
+    assert not at.exception
+    assert len(at.get("plotly_chart")) >= 3  # にぎわい・回り方・達成（評価の累計はスマホでは省く）

@@ -14,6 +14,8 @@
 - **推薦の A/B に関わる数字は出さない**（03 §5）
 - 指標の算出式は live_metrics.public_board にだけ書く
 - イベント ID は当日監視で設定した値を共有する（live_dashboard.current_event_id）
+- 配置は横画面・縦画面・スマホの3つを上部のボタンで切り替える（URL の ?layout= で指定もできる）。
+  **縦画面とスマホは全部の情報を1画面に収める**
 
 見た目: 数字はグラフと一緒に見せる。色は**フラットな単色を複数**使い、
 数字の意味ごとに色を固定する（訪問=青・参加者=緑・直近=橙・回遊中=赤・評価=紫・投票=水色）。
@@ -43,7 +45,6 @@ page_setup.configure(page_title="来場者向けボード", page_icon="🎉")
 #: 意味ごとに固定するフラットな色。グラデーション・発光は使わない
 BLUE, GREEN, ORANGE, RED, PURPLE, TEAL, YELLOW, PINK = (
     "#2563eb", "#16a34a", "#f97316", "#e11d48", "#7c3aed", "#0891b2", "#eab308", "#db2777")
-_GENRE_COLORS = [BLUE, ORANGE, GREEN, PURPLE, RED, TEAL, YELLOW, PINK, "#64748b", "#84cc16"]
 _ACHIEVE_COLORS = [YELLOW, ORANGE, RED, PURPLE]
 _GRID = "rgba(128,128,128,.18)"
 
@@ -57,6 +58,8 @@ _STYLE = """
   border-bottom:3px solid var(--c); }
 .pb-sec-head b { font-size:2rem; font-weight:900; }
 .pb-sec-head span { font-size:1.1rem; opacity:.7; font-weight:600; }
+/* Streamlit の文字要素は下に -1rem の余白を持つため、そのままだと次の要素（グラフ・タイル）に重なる。打ち消す */
+.pb-head, .pb-kpis, .pb-sec-head { margin-bottom:1rem !important; }
 @keyframes pb-blink { 0%,100% { opacity:1; } 50% { opacity:.3; } }
 
 .pb-head { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin:0 0 .2rem; }
@@ -115,29 +118,34 @@ def _trend(recent: int, prev: int) -> str:
             else (f"前の30分より <b>▼ {diff}</b>" if diff < 0 else "前の30分と同じペース"))
 
 
-def _layout(fig: go.Figure, title: str, height: int, legend: bool = False) -> go.Figure:
-    fig.update_layout(height=height, margin=dict(t=56 if title else 10, b=8, l=8, r=8), paper_bgcolor="rgba(0,0,0,0)",
-                      plot_bgcolor="rgba(0,0,0,0)", showlegend=legend, font=dict(size=15),
-                      title=dict(text=f"<b>{title}</b>", font=dict(size=22), x=0.01))
+def _layout(fig: go.Figure, title: str, height: int, legend: bool = False, k: float = 1.0) -> go.Figure:
+    """グラフ共通の見た目。k は文字の倍率（縦画面・スマホで小さくする）。"""
+    fig.update_layout(height=height, margin=dict(t=round(56 * k) if title else 6, b=6, l=6, r=6),
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", showlegend=legend,
+                      font=dict(size=round(15 * k)),
+                      title=dict(text=f"<b>{title}</b>", font=dict(size=round(22 * k)), x=0.01))
     return fig
 
 
-def _buzz_chart(b: dict, height: int) -> go.Figure:
+def _buzz_chart(b: dict, height: int, k: float = 1.0) -> go.Figure:
     """10分ごとの訪問（棒）と累計（線）を1枚に重ねる。"""
     s, cum = b["per_10min"], b["cum_checkins"]
     fig = go.Figure()
     fig.add_bar(x=s.index, y=s.values, name="10分ごと", marker_color=BLUE, marker_line_width=0, opacity=.9)
     fig.add_scatter(x=cum.index, y=cum.values, name="累計", yaxis="y2", mode="lines",
-                    line=dict(color=ORANGE, width=4, shape="hv"))
-    fig.update_layout(yaxis=dict(title="10分ごと", gridcolor=_GRID),
-                      yaxis2=dict(title="累計", overlaying="y", side="right", showgrid=False, rangemode="tozero"),
+                    line=dict(color=ORANGE, width=max(2, round(4 * k)), shape="hv"))
+    small = k < .8
+    fig.update_layout(yaxis=dict(title=None if small else "10分ごと", gridcolor=_GRID),
+                      yaxis2=dict(title=None if small else "累計", overlaying="y", side="right", showgrid=False,
+                                  rangemode="tozero"),
                       xaxis=dict(tickformat="%H:%M"),
-                      legend=dict(orientation="h", x=1, xanchor="right", y=1.12, font=dict(size=15)))
-    return _layout(fig, f"10分ごとの訪問と累計　（ピーク {b['peak']['at']:%H:%M}）", height, legend=True)
+                      legend=dict(orientation="h", x=1, xanchor="right", y=1.18 if small else 1.12,
+                                  font=dict(size=round(15 * k))))
+    return _layout(fig, f"10分ごとの訪問と累計（ピーク {b['peak']['at']:%H:%M}）", height, legend=True, k=k)
 
 
-def _achieve_chart(a: dict, n_people: int, n_booths: int | None, height: int) -> go.Figure:
-    """達成の4段階を、参加者に対する割合のドーナツ4つで並べる。中央に人数。"""
+def _achieve_chart(a: dict, n_people: int, n_booths: int | None, height: int, k: float = 1.0) -> go.Figure:
+    """達成の4段階を、参加者に対する割合のドーナツ4つで横に並べる。中央に人数。"""
     items = [("ビンゴ達成", "1ライン以上", a["bingo_1"]),
              ("ビンゴマスター", f"{a['many_lines']}ライン以上", a["bingo_many"]),
              ("コンプリート", "16マスすべて", a["card_complete"]),
@@ -148,45 +156,185 @@ def _achieve_chart(a: dict, n_people: int, n_booths: int | None, height: int) ->
         rest = max(n_people - n, 0) if n_people else 1
         fig.add_pie(values=[n, rest], hole=.68, sort=False, direction="clockwise", textinfo="none",
                     marker=dict(colors=[color, "rgba(128,128,128,.18)"], line=dict(width=0)),
-                    domain=dict(x=[x0, x1], y=[.2, 1]), hoverinfo="skip")
-        fig.add_annotation(x=(x0 + x1) / 2, y=.6, xref="paper", yref="paper", showarrow=False,
-                           text=f"<b>{n}</b><span style='font-size:18px'>人</span>", font=dict(size=40, color=color))
-        fig.add_annotation(x=(x0 + x1) / 2, y=.08, xref="paper", yref="paper", showarrow=False,
-                           text=f"<b>{name}</b><br><span style='font-size:13px'>{hint}</span>", font=dict(size=16))
-    return _layout(fig, "", height)
+                    domain=dict(x=[x0, x1], y=[.24, 1]), hoverinfo="skip")
+        # xanchor を明示しないと、両端（x<1/3・x>2/3）だけ左揃え・右揃えになって中心からずれる
+        fig.add_annotation(x=(x0 + x1) / 2, y=.62, xref="paper", yref="paper", showarrow=False, xanchor="center",
+                           text=f"<b>{n}</b><span style='font-size:{round(18 * k)}px'>人</span>",
+                           font=dict(size=round(40 * k), color=color))
+        label = f"<b>{name}</b>" if k < .8 else f"<b>{name}</b><br><span style='font-size:{round(13 * k)}px'>{hint}</span>"
+        fig.add_annotation(x=(x0 + x1) / 2, y=.1 if k >= .8 else .08, xref="paper", yref="paper", showarrow=False,
+                           xanchor="center",
+                           text=label, font=dict(size=round(16 * k)))
+    return _layout(fig, "", height, k=k)
 
 
-def _ratings_chart(b: dict, height: int) -> go.Figure:
+def _ratings_chart(b: dict, height: int, k: float = 1.0) -> go.Figure:
     cum = b["cum_ratings"]
     fig = go.Figure(go.Scatter(x=cum.index, y=cum.values, mode="lines", fill="tozeroy",
-                               line=dict(color=PURPLE, width=4, shape="hv"), fillcolor="rgba(124,58,237,.18)"))
+                               line=dict(color=PURPLE, width=max(2, round(4 * k)), shape="hv"),
+                               fillcolor="rgba(124,58,237,.18)"))
     fig.update_xaxes(tickformat="%H:%M")
     fig.update_yaxes(gridcolor=_GRID, rangemode="tozero")
-    return _layout(fig, "評価の累計", height)
+    return _layout(fig, "評価の累計", height, k=k)
 
 
-def _visits_chart(b: dict, height: int) -> go.Figure:
+def _visits_chart(b: dict, height: int, k: float = 1.0) -> go.Figure:
     vb = b["visit_buckets"]
     colors = [GREEN, TEAL, BLUE, PURPLE, PINK][:len(vb)]
-    fig = go.Figure(go.Bar(x=[str(k) for k in vb.index], y=vb.values, marker_color=colors, marker_line_width=0,
+    fig = go.Figure(go.Bar(x=[str(k_) for k_ in vb.index], y=vb.values, marker_color=colors, marker_line_width=0,
                            text=[f"{v}人" for v in vb.values], textposition="outside", cliponaxis=False,
-                           textfont=dict(size=18)))
-    fig.update_xaxes(title="回ったブース数")
+                           textfont=dict(size=round(18 * k))))
+    fig.update_xaxes(title=None if k < .8 else "回ったブース数")
     fig.update_yaxes(visible=False)
-    return _layout(fig, "何ブース回った？", height)
+    return _layout(fig, "何ブース回った？", height, k=k)
 
 
-def _genre_chart(b: dict, height: int) -> go.Figure:
-    gs = b["genre_share"]
-    fig = go.Figure(go.Pie(labels=gs.index, values=gs.values, hole=.55, sort=True, direction="clockwise",
-                           marker=dict(colors=_GENRE_COLORS, line=dict(width=2, color="rgba(255,255,255,.6)")),
-                           textinfo="percent", textfont=dict(size=15, color="#fff")))
-    fig.update_layout(legend=dict(font=dict(size=14), x=1.02, y=.5))
-    return _layout(fig, "どのジャンルを回った？", height, legend=True)
+#: 画面の向きごとの配置。**縦とスマホは1画面に全部を収める**（スクロールさせない）
+LAYOUTS = {"横画面": "landscape", "縦画面": "portrait", "スマホ": "phone"}
+
+#: 向きごとの CSS。共通の _STYLE の後に差し込み、大きさと余白だけを上書きする
+_LAYOUT_CSS = {
+    "landscape": "",
+    "portrait": """
+<style>
+.block-container { padding:2.6rem 1.2rem .4rem !important; }
+[data-testid="stVerticalBlock"] { gap:.55rem; }
+.pb-head h1 { font-size:2.2rem !important; }
+.pb-live { font-size:1.7rem; }
+.pb-sec-head { margin:.9rem 0 .45rem; padding-bottom:.3rem; }
+.pb-sec-head b { font-size:1.5rem; }
+.pb-sec-head span { font-size:.95rem; }
+/* 共通 CSS は幅 1100px 以下でタイルを2列に折り返すが、縦画面では横一列に並べて高さを節約する */
+.pb-kpis { gap:.8rem; grid-template-columns:repeat(var(--n,4),1fr) !important; }
+.pb-kpi { padding:.7rem 1rem .8rem 1.3rem; }
+.pb-kpi-label { font-size:1.05rem; }
+.pb-kpi-icon { width:1.9rem; height:1.9rem; font-size:1.05rem; }
+.pb-kpi-val { font-size:3.6rem; margin:.3rem 0 .2rem; }
+.pb-kpi-val small { font-size:1.3rem; }
+.pb-kpi-note { font-size:.9rem; }
+.pb-kpi.row .pb-kpi-val { font-size:3rem; }
+.pb-foot { display:none; }
+</style>
+""",
+    "phone": """
+<style>
+.block-container { padding:2.9rem .55rem .2rem !important; }
+[data-testid="stVerticalBlock"] { gap:.35rem; }
+/* スマホでも横並びを崩さない（Streamlit は狭い画面で列を縦に積む） */
+[data-testid="stHorizontalBlock"] { flex-wrap:nowrap !important; gap:.35rem !important; }
+[data-testid="stHorizontalBlock"] > div { min-width:0 !important; }
+.pb-head { gap:.4rem; margin-bottom:.55rem; align-items:center; }
+.pb-head h1 { font-size:1.15rem !important; }
+.pb-live { font-size:.95rem; padding:.15rem .5rem; border-width:2px; gap:.35rem; }
+.pb-live i { width:.6rem; height:.6rem; }
+.pb-sec-head { margin:.45rem 0 .35rem; padding-bottom:.15rem; border-bottom-width:2px; }
+.pb-sec-head b { font-size:.95rem; }
+.pb-sec-head span { display:none; }
+.pb-kpis { gap:.35rem; grid-template-columns:repeat(var(--n,4),1fr) !important; }
+.pb-kpi { padding:.35rem .5rem .4rem .75rem; border-radius:10px; }
+.pb-kpi::before { width:5px; }
+.pb-kpi-label { font-size:.66rem; gap:.25rem; white-space:nowrap; letter-spacing:-.02em; }
+.pb-kpi-icon { display:none; }
+.pb-kpi-val { font-size:1.65rem; margin:.15rem 0 0; }
+.pb-kpi-val small { font-size:.7rem; margin-left:.15rem; }
+.pb-kpi-note { display:none; }
+.pb-foot { display:none; }
+</style>
+""",
+}
+
+
+def _header(now: pd.Timestamp) -> None:
+    st.markdown(f'<div class="pb-head"><h1>🎉 プロトフェス いまの会場</h1>'
+                f'<span class="pb-live"><i></i><em>LIVE</em>{ld.to_jst(now):%H:%M}</span></div>', unsafe_allow_html=True)
+
+
+def _venue_tiles(b: dict, n_people: int, short: bool = False) -> list[str]:
+    """会場の動きの4タイル。累計（総〜）2つ → 直近30分の2つの順。ラベルは全配置で共通。"""
+    m = b["active_min"]
+    return [
+        _kpi("総参加者数", f"{n_people:,}", "人", "ブースを1つ以上訪れた人", GREEN, icon="👥"),
+        _kpi("総訪問数", f"{b['n_checkins']:,}", "回",
+             f"1人平均 <b>{b['visits_mean']:.1f}</b> ブース" if b["visits_mean"] else "", BLUE, icon="📍"),
+        _kpi(f"参加者数/{m}分", f"{b['n_active']:,}", "人", f"この{m}分に訪問した人", RED, icon="🚶"),
+        _kpi(f"訪問数/{m}分", f"{b['recent_checkins']:,}", "回",
+             _trend(b["recent_checkins"], b["prev_checkins"]), ORANGE, icon="⏱️"),
+    ]
+
+
+def _voice_tiles(b: dict, short: bool = False) -> list[str]:
+    rpu = f"{b['ratings_per_user']:.1f}" if b["ratings_per_user"] is not None else "—"
+    return [_kpi("評価" if short else "届いた評価", f"{b['n_ratings']:,}", "件", "", PURPLE, icon="📝"),
+            _kpi("1人あたり" if short else "1人あたりの評価", rpu, "件", "", PINK, icon="🙋"),
+            _kpi("投票" if short else "アワード投票", f"{b['n_votes']:,}", "票", "", TEAL, icon="🏆")]
+
+
+def _chart(container, fig: go.Figure) -> None:
+    container.plotly_chart(fig, width="stretch", config=_PLOT_CONFIG)
+
+
+# 並び順は全配置で共通: 会場の動き → 評価・投票 → みんなの回り方 → ビンゴ・達成（最後に達成で締める）
+
+def _render_landscape(b: dict, n_people: int) -> None:
+    """横画面（会場のモニター）。まとまりごとに縦に並べ、スクロールして見る。"""
+    _sec("会場の動き", "いま会場はどれくらい盛り上がっている？", BLUE)
+    _kpis(_venue_tiles(b, n_people))
+    _chart(st, _buzz_chart(b, 380))
+
+    _sec("評価・投票", "みんなの声がどれだけ集まった？", PURPLE)
+    c1, c2 = st.columns([1, 1.4], gap="large")
+    with c1:
+        v = _voice_tiles(b)
+        _kpis(v[:2])
+        _kpis([_kpi("アワード投票", f"{b['n_votes']:,}", "票", "お気に入りのブースに投票しよう", TEAL, "row", icon="🏆")])
+    _chart(c2, _ratings_chart(b, 360))
+
+    _sec("みんなの回り方", "みんなは何ブース回っている？", GREEN)
+    _chart(st, _visits_chart(b, 360))
+
+    _sec("ビンゴ・達成", "参加者のうち何人が達成した？", YELLOW)
+    _chart(st, _achieve_chart(b["achievers"], n_people, b["n_booths"], 340))
+    st.markdown(f'<div class="pb-foot">{ld.REFRESH_SEC}秒ごとに自動更新　/　会場全体の集計です</div>',
+                unsafe_allow_html=True)
+
+
+def _render_portrait(b: dict, n_people: int) -> None:
+    """縦画面（縦置きのモニター 1080×1920）。**全部を1画面に収める。**"""
+    k = .85
+    _sec("会場の動き", "いま会場はどれくらい盛り上がっている？", BLUE)
+    _kpis(_venue_tiles(b, n_people))
+    _chart(st, _buzz_chart(b, 350, k))
+
+    _sec("評価・投票", "みんなの声がどれだけ集まった？", PURPLE)
+    _kpis(_voice_tiles(b))
+    _chart(st, _ratings_chart(b, 200, k))
+
+    _sec("みんなの回り方", "みんなは何ブース回っている？", GREEN)
+    _chart(st, _visits_chart(b, 300, k))
+
+    _sec("ビンゴ・達成", "参加者のうち何人が達成した？", YELLOW)
+    _chart(st, _achieve_chart(b["achievers"], n_people, b["n_booths"], 270, k))
+
+
+def _render_phone(b: dict, n_people: int) -> None:
+    """スマホ（縦 390×844 前後）。**全部を1画面に収める。** 補足の文と凡例は省き、数字とグラフだけにする。"""
+    k = .55
+    _sec("会場の動き", "", BLUE)
+    _kpis(_venue_tiles(b, n_people, short=True))
+    _chart(st, _buzz_chart(b, 150, k))
+    _sec("評価・投票", "", PURPLE)
+    _kpis(_voice_tiles(b, short=True))
+    _sec("みんなの回り方", "", GREEN)
+    _chart(st, _visits_chart(b, 110, k))
+    _sec("ビンゴ・達成", "", YELLOW)
+    _chart(st, _achieve_chart(b["achievers"], n_people, b["n_booths"], 125, k))
+
+
+_RENDERERS = {"landscape": _render_landscape, "portrait": _render_portrait, "phone": _render_phone}
 
 
 @st.fragment(run_every=ld.REFRESH_SEC)
-def render(source_kind: str, source_dir: str, event_id: str | None) -> None:
+def render(source_kind: str, source_dir: str, event_id: str | None, layout: str = "landscape") -> None:
     now = pd.Timestamp.now("UTC")
     try:
         t = ld.load_tables(source_kind, source_dir, event_id)
@@ -198,47 +346,24 @@ def render(source_kind: str, source_dir: str, event_id: str | None) -> None:
     votes = lm.award_voters(meta["award_votes"], meta["users"]) if meta["award_votes"] is not None else None
     b = lm.public_board(t["check_ins"], t["booth_ratings"], t["bingo_cells"], now,
                         meta["booths"], meta["categories"], votes)
-    n_people = b["n_participants"]
-
-    st.markdown(f'<div class="pb-head"><h1>🎉 プロトフェス いまの会場</h1>'
-                f'<span class="pb-live"><i></i><em>LIVE</em>{ld.to_jst(now):%H:%M}</span></div>', unsafe_allow_html=True)
-    # まとまりごとに縦に並べる。1つのまとまりには「数字のタイル → グラフ1枚」までにする
-    _sec("会場の動き", "いま会場はどれくらい盛り上がっている？", BLUE)
-    _kpis([
-        _kpi("参加者", f"{n_people:,}", "人", "ブースを1つ以上訪れた人", GREEN, icon="👥"),
-        _kpi("みんなのブース訪問", f"{b['n_checkins']:,}", "回",
-             f"1人平均 <b>{b['visits_mean']:.1f}</b> ブース" if b["visits_mean"] else "", BLUE, icon="📍"),
-        _kpi(f"この{b['active_min']}分の訪問", f"{b['recent_checkins']:,}", "回",
-             _trend(b["recent_checkins"], b["prev_checkins"]), ORANGE, icon="⏱️"),
-        _kpi("いま回遊中", f"{b['n_active']:,}", "人", f"この{b['active_min']}分に訪問した人", RED, icon="🚶"),
-    ])
+    _header(now)
     if b["per_10min"].empty:
+        _kpis(_venue_tiles(b, b["n_participants"], short=layout == "phone"))
         st.info("まだ訪問がありません。ブースを回ってビンゴを始めよう！")
         return
-    st.plotly_chart(_buzz_chart(b, 380), width="stretch", config=_PLOT_CONFIG)
+    _RENDERERS[layout](b, b["n_participants"])
 
-    _sec("ビンゴ・達成", "参加者のうち何人が達成した？", YELLOW)
-    st.plotly_chart(_achieve_chart(b["achievers"], n_people, b["n_booths"], 340), width="stretch",
-                    config=_PLOT_CONFIG)
 
-    _sec("評価・投票", "みんなの声がどれだけ集まった？", PURPLE)
-    rpu = f"{b['ratings_per_user']:.1f}" if b["ratings_per_user"] is not None else "—"
-    c1, c2 = st.columns([1, 1.4], gap="large")
-    with c1:
-        _kpis([_kpi("届いた評価", f"{b['n_ratings']:,}", "件", "", PURPLE, icon="📝"),
-               _kpi("1人あたりの評価", rpu, "件", "", PINK, icon="🙋")])
-        st.write("")
-        _kpis([_kpi("アワード投票", f"{b['n_votes']:,}", "票", "お気に入りのブースに投票しよう", TEAL, "row", icon="🏆")])
-    c2.plotly_chart(_ratings_chart(b, 360), width="stretch", config=_PLOT_CONFIG)
-
-    _sec("みんなの回り方", "何ブース・どのジャンルを回っている？", GREEN)
-    d1, d2 = st.columns(2, gap="large")
-    d1.plotly_chart(_visits_chart(b, 380), width="stretch", config=_PLOT_CONFIG)
-    if not b["genre_share"].empty:
-        d2.plotly_chart(_genre_chart(b, 380), width="stretch", config=_PLOT_CONFIG)
-
-    st.markdown(f'<div class="pb-foot">{ld.REFRESH_SEC}秒ごとに自動更新　/　会場全体の集計です</div>',
-                unsafe_allow_html=True)
+def _layout_switch() -> str:
+    """横・縦・スマホの切り替え。選んだ向きは URL の ?layout= に書き、リロードや別端末でも同じ配置で開けるようにする。"""
+    by_value = {v: k for k, v in LAYOUTS.items()}
+    current = by_value.get(st.query_params.get("layout", ""), "横画面")
+    pick = st.segmented_control("画面の向き", list(LAYOUTS), default=current, key="pb_layout",
+                                label_visibility="collapsed") or current
+    layout = LAYOUTS[pick]
+    if st.query_params.get("layout") != layout:
+        st.query_params["layout"] = layout
+    return layout
 
 
 def main() -> None:
@@ -250,7 +375,9 @@ def main() -> None:
         st.caption("イベント ID は「推薦の当日監視」で設定した値を共有しています。")
         st.caption(f"データ源: {ld.source_label(ld.SOURCE_KIND, ld.DEFAULT_SOURCE_DIR, event_id)}")
         st.caption(f"イベント: {event_id or '（指定なし・全イベント）'}")
-    render(ld.SOURCE_KIND, ld.DEFAULT_SOURCE_DIR, event_id)
+    layout = _layout_switch()
+    st.markdown(_LAYOUT_CSS[layout], unsafe_allow_html=True)
+    render(ld.SOURCE_KIND, ld.DEFAULT_SOURCE_DIR, event_id, layout)
 
 
 if __name__ == "__main__":
