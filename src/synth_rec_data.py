@@ -42,8 +42,11 @@ def generate(n_users: int = 110, seed: int = 20261016, *, recommender_dead: bool
 
     booths = pd.DataFrame({
         "id": [f"b{i:02d}" for i in range(40)],
+        "event_id": EVENT_ID,
         "name": [f"ブース{i:02d}" for i in range(40)],
+        "display_code": [f"{i + 1:02d}" for i in range(40)],
         "category_id": [f"c{i % 8}" for i in range(40)],
+        "is_active": 1,
     })
     booth_ids = booths["id"].tolist()
 
@@ -142,7 +145,21 @@ def generate(n_users: int = 110, seed: int = 20261016, *, recommender_dead: bool
         "booth_ratings": pd.DataFrame(ratings),
         "bingo_cells": pd.DataFrame(cells),
     }
+    tables["categories"] = pd.DataFrame({"id": [f"c{i}" for i in range(8)], "name": [
+        "テクノロジー", "遊び・ゲーム", "健康・からだ", "防災・環境", "食・くらし", "アート・デザイン", "教育", "地域・まちづくり"]})
+    tables["awards"], tables["award_votes"] = _awards(rng, participant_ids, booth_ids)
     return tables
+
+
+def _awards(rng, participant_ids: list[str], booth_ids: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """アワード3賞と、その投票（1人 × 1賞 = 1票。投票する人は半分ほど）。人気は偏らせる。"""
+    awards = pd.DataFrame({"id": ["aw-1", "aw-2", "aw-3"], "event_id": EVENT_ID,
+                           "name": ["ベストアイデア賞", "ベストデザイン賞", "また来たい賞"], "sort_order": [1, 2, 3]})
+    weight = rng.dirichlet(np.full(len(booth_ids), 0.4))
+    votes = [{"id": f"vote-{a}-{u}", "event_id": EVENT_ID, "award_id": a, "user_id": u,
+              "booth_id": booth_ids[int(rng.choice(len(booth_ids), p=weight))]}
+             for a in awards["id"] for u in participant_ids if rng.random() < 0.5]
+    return awards, pd.DataFrame(votes)
 
 
 def ops_state(recommender_dead: bool) -> dict:
