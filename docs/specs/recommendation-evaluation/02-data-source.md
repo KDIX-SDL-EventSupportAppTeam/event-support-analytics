@@ -52,6 +52,7 @@
 |---|---|
 | `user_survey_answers` | `age_range`, `occupation`, `industry`, `custom_answers`（`interest_categories` ほか） |
 | `booths` / `categories` / `booth_tags` | `category_id`, `name`, `tag` |
+| `awards` / `award_votes` | `name`, `sort_order` / `award_id`, `user_id`, `booth_id`（ブース詳細のアワード集計。読み取り専用ユーザーに SELECT 権限が要る） |
 | `recommendation_scores` | `score`, `rank_in_event`, `interest_match`, `attributes`, `reason_payload` |
 
 ### 2.1 タイムスタンプの時刻帯が列によって違う（さくら DB）

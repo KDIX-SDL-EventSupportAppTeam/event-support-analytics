@@ -25,6 +25,10 @@ GRANT SELECT ON `<DB名>`.`booths`               TO 'bingo_ro'@'localhost';
 GRANT SELECT ON `<DB名>`.`categories`           TO 'bingo_ro'@'localhost';
 GRANT SELECT ON `<DB名>`.`booth_tags`           TO 'bingo_ro'@'localhost';
 
+-- ブース詳細（運営向け）のアワード集計
+GRANT SELECT ON `<DB名>`.`awards`               TO 'bingo_ro'@'localhost';
+GRANT SELECT ON `<DB名>`.`award_votes`          TO 'bingo_ro'@'localhost';
+
 -- users は列まで絞る。**email / password_hash は権限の側で読めなくしておく。**
 GRANT SELECT (`id`, `role`) ON `<DB名>`.`users` TO 'bingo_ro'@'localhost';
 
