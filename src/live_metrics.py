@@ -761,12 +761,10 @@ def public_board(check_ins: pd.DataFrame, booth_ratings: pd.DataFrame, bingo_cel
         "recent_checkins": 0,
         "prev_checkins": 0,
         "visits_mean": None,
-        "genres_mean": None,
         "per_10min": pd.Series(dtype=int),
         "cum_checkins": pd.Series(dtype=int),
         "cum_ratings": pd.Series(dtype=int),
         "peak": None,
-        "genre_share": pd.Series(dtype=int),
         "visit_buckets": pd.Series(dtype=int),
         "bingo": bingo_progress(bingo_cells, check_ins),
         "n_booths_visited": 0,
@@ -814,11 +812,6 @@ def public_board(check_ins: pd.DataFrame, booth_ratings: pd.DataFrame, bingo_cel
                                   labels=["1〜2", "3〜4", "5〜7", "8〜10", "11〜"]).value_counts().sort_index()
     out["n_booths_visited"] = int(check_ins["booth_id"].nunique())
 
-    names = _booth_labels(check_ins["booth_id"], booths, categories)
-    genre_of = check_ins["booth_id"].map(names["ジャンル"])
-    if (genre_of != "—").any():
-        out["genre_share"] = genre_of[genre_of != "—"].value_counts()
-        out["genres_mean"] = float(genre_of.groupby(check_ins["user_id"]).nunique().mean())
     return out
 
 
