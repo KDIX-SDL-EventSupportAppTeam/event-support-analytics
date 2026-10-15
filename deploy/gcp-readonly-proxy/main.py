@@ -49,6 +49,8 @@ ALLOWED: dict[str, frozenset[str] | None] = {
     "booths": None,
     "categories": None,
     "booth_tags": None,
+    "awards": None,
+    "award_votes": None,
     "users": frozenset({"id", "role"}),
 }
 

@@ -730,9 +730,13 @@ def bingo_progress(bingo_cells: pd.DataFrame, check_ins: pd.DataFrame) -> dict:
 
 
 def _ref_time(ts: pd.Series, now: pd.Timestamp) -> pd.Timestamp:
-    """「いま」の基準時刻。now がデータより前（合成データ）なら最新のチェックインを基準にする。"""
-    ref = min(_to_utc(now), ts.max())
-    return ts.max() if not (ts <= ref).any() else ref
+    """「いま」の基準時刻。原則 now。データが全部 now より後（合成データ）のときだけ最新のチェックインを基準にする。
+
+    **データの最新に寄せない。** 過去のデータで最新に寄せると、直近30分が「最後の30分」になり、
+    短い試験運用では累計と同じ数になる。
+    """
+    now_utc = _to_utc(now)
+    return now_utc if (ts <= now_utc).any() else ts.max()
 
 
 def public_board(check_ins: pd.DataFrame, booth_ratings: pd.DataFrame, bingo_cells: pd.DataFrame,
@@ -890,24 +894,41 @@ def award_voters(award_votes: pd.DataFrame, users: pd.DataFrame | None) -> pd.Da
 
 
 def award_ranking(award_votes: pd.DataFrame, awards: pd.DataFrame, booths: pd.DataFrame | None = None,
-                  categories: pd.DataFrame | None = None, limit: int = 5) -> list[dict]:
-    """賞ごとの上位。**同数は同順位**（23, 23, 20 → 1位, 1位, 3位）で、同率は切り捨てない。
+                  categories: pd.DataFrame | None = None, limit: int | None = None) -> list[dict]:
+    """賞ごとの順位。**同数は同順位**（23, 23, 20 → 1位, 1位, 3位）で、同率は切り捨てない。
 
     event-support-server の rankTopBooths と同じ規則。賞は sort_order 順。
-    返り値: [{"award": 賞名, "n_votes": 総票数, "table": DataFrame(順位・ブース・ジャンル・票)}]
+    ブース一覧が引けるときは **票0のブースも最下位として載せる**（最下位まで何票かを見るため）。
+    limit を渡すとその順位以内に絞る（None なら全ブース）。
+    返り値: [{"award": 賞名, "n_votes": 総票数, "table": DataFrame(順位・番号・ブース・ジャンル・票)}]
     """
+    ids = pd.Index([])
+    if booths is not None and not booths.empty and "id" in booths.columns:
+        b = booths
+        if "is_active" in b.columns:
+            b = b[pd.to_numeric(b["is_active"], errors="coerce").fillna(1) == 1]
+        ids = pd.Index(b["id"].unique())
+    codes = (booths.set_index("id")["display_code"] if booths is not None and not booths.empty
+             and {"id", "display_code"} <= set(booths.columns) else pd.Series(dtype=object))
     if awards is None or awards.empty:
         return []
     a = awards.assign(_o=pd.to_numeric(awards.get("sort_order", 0), errors="coerce").fillna(0))
     out = []
     for _, aw in a.sort_values(["_o", "name"]).iterrows():
         v = award_votes[award_votes["award_id"] == aw["id"]] if not award_votes.empty else award_votes
-        cnt = v.groupby("booth_id").size().rename("票") if not v.empty else pd.Series(dtype=int, name="票")
-        lbl = _booth_labels(pd.Series(cnt.index, dtype=object), booths, categories)
-        t = lbl.join(cnt).reset_index(drop=True).sort_values(["票", "ブース"], ascending=[False, True])
+        cnt = v.groupby("booth_id").size() if not v.empty else pd.Series(dtype=int)
+        all_ids = ids.union(pd.Index(cnt.index))
+        lbl = _booth_labels(pd.Series(all_ids, dtype=object), booths, categories)
+        lbl["票"] = cnt.reindex(lbl.index).fillna(0).astype(int)
+        lbl.insert(0, "番号", lbl.index.map(codes).fillna("").astype(str) if len(lbl) else [])
+        # 同票は会場の番号順（番号は文字列なので数として並べる）→ 名前順
+        lbl["_n"] = pd.to_numeric(lbl["番号"], errors="coerce")
+        t = (lbl.reset_index(drop=True).sort_values(["票", "_n", "ブース"], ascending=[False, True, True],
+                                                    na_position="last").drop(columns="_n"))
         t.insert(0, "順位", t["票"].rank(method="min", ascending=False).astype(int) if len(t) else [])
-        out.append({"award": aw["name"], "n_votes": int(cnt.sum()),
-                    "table": t[t["順位"] <= limit].reset_index(drop=True)})
+        if limit is not None:
+            t = t[t["順位"] <= limit]
+        out.append({"award": aw["name"], "n_votes": int(cnt.sum()), "table": t.reset_index(drop=True)})
     return out
 
 

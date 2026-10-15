@@ -251,7 +251,18 @@ def test_booth_ops_table_includes_unvisited_and_trend():
     assert list(t["ブース"]) == ["A", "B", "C"]
     assert t.loc["b2", "訪問"] == 0  # 訪問ゼロも載る
     assert t.loc["b0", "直近"] == 2 and t.loc["b0", "評価数"] == 2
-    assert t.loc["b1", "経過分"] == 10  # 基準はデータの最新時刻（05:20）
+    assert t.loc["b1", "経過分"] == 15  # 基準は now（05:25）。データの最新には寄せない
+
+
+def test_recent_window_is_anchored_to_now_not_latest_data():
+    """過去の短い試験運用でも、直近30分が累計にならない。"""
+    ci = pd.DataFrame({"user_id": ["u1", "u2", "u3"], "booth_id": ["b0", "b0", "b1"],
+                       "checked_in_at": pd.to_datetime(["2026-10-16T05:00Z", "2026-10-16T05:05Z",
+                                                        "2026-10-16T05:10Z"])})
+    now = pd.Timestamp("2026-10-16T08:00:00Z")
+    b = lm.public_board(ci, pd.DataFrame(columns=["rated_at"]), pd.DataFrame(), now)
+    assert b["n_participants"] == 3 and b["n_active"] == 0 and b["recent_checkins"] == 0
+    assert lm.booth_ops_table(ci, pd.DataFrame(), now)["直近"].sum() == 0
 
 
 def test_award_ranking_ties_share_rank_and_excludes_staff():
@@ -263,3 +274,13 @@ def test_award_ranking_ties_share_rank_and_excludes_staff():
     r = lm.award_ranking(lm.award_voters(votes, users), awards)
     assert r[0]["n_votes"] == 4
     assert list(r[0]["table"]["順位"]) == [1, 1]
+
+
+def test_award_ranking_lists_zero_vote_booths_last():
+    awards = pd.DataFrame({"id": ["a1"], "name": ["賞"], "sort_order": [1]})
+    votes = pd.DataFrame({"award_id": "a1", "user_id": ["u1", "u2", "u3"], "booth_id": ["b1", "b1", "b0"]})
+    booths = pd.DataFrame({"id": ["b0", "b1", "b2", "b3"], "name": list("ABCD"), "is_active": [1, 1, 1, 0]})
+    t = lm.award_ranking(votes, awards, booths)[0]["table"]
+    assert list(t["ブース"]) == ["B", "A", "C"]  # 非公開の D は載せない
+    assert list(t["順位"]) == [1, 2, 3] and list(t["票"]) == [2, 1, 0]
+    assert len(lm.award_ranking(votes, awards, booths, limit=2)[0]["table"]) == 2
