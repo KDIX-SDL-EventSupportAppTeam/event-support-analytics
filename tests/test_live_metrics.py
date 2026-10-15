@@ -202,3 +202,64 @@ def test_normalize_ops_state_toplevel_real_value_wins_over_nested():
     s = lm.normalize_ops_state({"gamma": 0.62, "rule_coverage": 0.58,
                                 "rules": {"gamma": 0.1, "candidate_coverage": 0.2}})
     assert (s["gamma"], s["rule_coverage"]) == (0.62, 0.58)
+
+
+def _board_fixture():
+    cells = pd.DataFrame({"id": [f"x{i}" for i in range(16)], "card_id": "c1", "position": range(16),
+                          "booth_id": [f"b{i}" for i in range(16)], "is_achieved": [1] * 4 + [0] * 12})
+    ci = pd.DataFrame({"user_id": ["u1", "u1", "u2"], "booth_id": ["b0", "b1", "b0"],
+                       "cell_id": ["x0", "x1", None],
+                       "checked_in_at": ["2026-10-16T05:00:00Z", "2026-10-16T05:10:00Z", "2026-10-16T05:20:00Z"]})
+    br = pd.DataFrame({"user_id": ["u1", "u2", "u1"], "booth_id": ["b0", "b0", "b1"],
+                       "rating": [4, 4, 1], "scale": [4, 4, 4]})
+    booths = pd.DataFrame({"id": ["b0", "b1", "b2"], "name": ["A", "B", "C"], "category_id": ["g", "g", "h"],
+                           "display_code": ["01", "02", "03"]})
+    return cells, ci, br, booths
+
+
+def test_public_board_counts_bingo_lines():
+    cells, ci, br, booths = _board_fixture()
+    b = lm.public_board(ci, br, cells, pd.Timestamp("2026-10-16T05:25:00Z"), booths)
+    assert b["bingo"]["n_bingo_users"] == 1 and b["bingo"]["n_lines"] == 1
+    assert b["n_participants"] == 2 and b["n_checkins"] == 3 and b["n_ratings"] == 3
+    assert b["n_booths_visited"] == 2 and b["n_booths"] == 3
+    a = b["achievers"]
+    assert (a["bingo_1"], a["bingo_many"], a["card_complete"], a["all_booths"]) == (1, 0, 0, 0)
+
+
+def test_public_board_counts_card_complete_and_all_booths():
+    cells, ci, br, booths = _board_fixture()
+    cells = cells.assign(is_achieved=1)  # 全マス達成 = 10 ライン
+    ci = pd.concat([ci, ci.iloc[[0]].assign(booth_id="b2", cell_id=None)])  # u1 が3ブースすべてを訪問
+    a = lm.public_board(ci, br, cells, pd.Timestamp("2026-10-16T05:25:00Z"), booths)["achievers"]
+    assert (a["bingo_1"], a["bingo_many"], a["card_complete"], a["all_booths"]) == (1, 1, 1, 1)
+
+
+def test_public_board_never_exposes_booths_or_rating_quality():
+    """来場者向けにはブースを特定できる値と評価の良し悪しを返さない（03 §8）。"""
+    cells, ci, br, booths = _board_fixture()
+    b = lm.public_board(ci, br, cells, pd.Timestamp("2026-10-16T05:25:00Z"), booths)
+    for v in b.values():
+        if isinstance(v, (pd.Series, pd.DataFrame)):
+            assert not set(map(str, v.index)) & {"A", "B", "C", "b0", "b1", "b2"}
+    assert "satisfaction" not in b and not any(k.startswith("top_") for k in b)
+
+
+def test_booth_ops_table_includes_unvisited_and_trend():
+    cells, ci, br, booths = _board_fixture()
+    t = lm.booth_ops_table(ci, br, pd.Timestamp("2026-10-16T05:25:00Z"), booths)
+    assert list(t["ブース"]) == ["A", "B", "C"]
+    assert t.loc["b2", "訪問"] == 0  # 訪問ゼロも載る
+    assert t.loc["b0", "直近"] == 2 and t.loc["b0", "評価数"] == 2
+    assert t.loc["b1", "経過分"] == 10  # 基準はデータの最新時刻（05:20）
+
+
+def test_award_ranking_ties_share_rank_and_excludes_staff():
+    awards = pd.DataFrame({"id": ["a1"], "name": ["賞"], "sort_order": [1]})
+    votes = pd.DataFrame({"award_id": "a1", "user_id": ["u1", "u2", "u3", "u4", "s1"],
+                          "booth_id": ["b0", "b0", "b1", "b1", "b2"]})
+    users = pd.DataFrame({"id": ["u1", "u2", "u3", "u4", "s1"],
+                          "role": ["participant", "exhibitor", "viewer", None, "staff"]})
+    r = lm.award_ranking(lm.award_voters(votes, users), awards)
+    assert r[0]["n_votes"] == 4
+    assert list(r[0]["table"]["順位"]) == [1, 1]

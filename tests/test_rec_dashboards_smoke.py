@@ -1,5 +1,6 @@
 """当日・事後の Streamlit 画面が合成データで例外なく起動することの確認（03 §6 リハーサル）。"""
 
+import json
 import sys
 from pathlib import Path
 
@@ -151,3 +152,30 @@ def test_live_dashboard_survives_missing_proxy_credentials(monkeypatch, synth_di
     at.run()
     assert not at.exception
     assert any(rec_db.SqlSource.URL_ENV in e.value for e in at.error)
+
+
+def test_public_board_runs_on_synth(monkeypatch, synth_dir):
+    """来場者向けボードが合成データで起動し、内部のエラー文を出さない（03 §8）。"""
+    monkeypatch.setattr(live_dashboard, "DEFAULT_SOURCE_DIR", str(synth_dir))
+    at = AppTest.from_file(str(SRC / "public_board.py"), default_timeout=60)
+    at.run()
+    assert not at.exception
+    assert not at.error
+    html = " ".join(m.value for m in at.markdown)
+    assert "ブース訪問" in html
+    # spec は JSON で、日本語は \uXXXX にエスケープされている
+    charts = " ".join(json.loads(c.proto.spec) and json.dumps(json.loads(c.proto.spec), ensure_ascii=False)
+                      for c in at.get("plotly_chart"))
+    assert "ビンゴ達成" in charts and "10分ごとの訪問" in charts
+    assert "ブース00" not in html + charts  # ブース名を来場者に見せない
+
+
+def test_booth_board_runs_on_synth(monkeypatch, synth_dir):
+    """ブース詳細が合成データで起動し、アワードの上位まで出る（03 §9）。"""
+    monkeypatch.setattr(live_dashboard, "DEFAULT_SOURCE_DIR", str(synth_dir))
+    at = AppTest.from_file(str(SRC / "booth_board.py"), default_timeout=60)
+    at.run()
+    assert not at.exception
+    assert not at.error
+    html = " ".join(m.value for m in at.markdown)
+    assert "ベストアイデア賞" in html

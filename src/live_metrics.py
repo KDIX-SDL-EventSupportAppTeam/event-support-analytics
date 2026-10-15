@@ -684,3 +684,253 @@ def booth_popularity(check_ins: pd.DataFrame, booth_ratings: pd.DataFrame,
     out.insert(1, "ジャンル", genre)
     out["評価数"] = out["評価数"].fillna(0).astype(int)
     return out.drop(columns="booth_id").sort_values("訪問", ascending=False).reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# 来場者向けボード（当日、会場のモニターに映す画面）
+# ---------------------------------------------------------------------------
+
+#: ビンゴカードは 4×4。縦・横・斜めの10本
+BINGO_SIZE = 4
+BINGO_LINES = (
+    [[r * BINGO_SIZE + c for c in range(BINGO_SIZE)] for r in range(BINGO_SIZE)]
+    + [[r * BINGO_SIZE + c for r in range(BINGO_SIZE)] for c in range(BINGO_SIZE)]
+    + [[i * BINGO_SIZE + i for i in range(BINGO_SIZE)],
+       [i * BINGO_SIZE + (BINGO_SIZE - 1 - i) for i in range(BINGO_SIZE)]]
+)
+
+#: 「たくさんビンゴした人」と数えるライン数
+MANY_LINES = 4
+
+#: 「アクティブ」と数える直近の分数
+ACTIVE_MIN = 30
+
+
+def bingo_progress(bingo_cells: pd.DataFrame, check_ins: pd.DataFrame) -> dict:
+    """ビンゴの達成状況。**マスの達成は `is_achieved` か、そのマス経由のチェックインで判定する。**
+
+    どちらも「そのマスのブースを訪れた」を意味する。片方しか埋まっていないデータでも数えられるようにする。
+    """
+    empty = {"n_cards": 0, "n_bingo_users": 0, "n_lines": 0, "n_full": 0, "lines_per_card": pd.Series(dtype=int)}
+    if bingo_cells.empty or "position" not in bingo_cells.columns:
+        return empty
+    c = bingo_cells.copy()
+    done = pd.to_numeric(c.get("is_achieved", 0), errors="coerce").fillna(0) == 1
+    if not check_ins.empty and "cell_id" in check_ins.columns:
+        done |= c["id"].isin(set(check_ins["cell_id"].dropna()))
+    c["done"] = done
+    c["position"] = pd.to_numeric(c["position"], errors="coerce")
+    grid = c.pivot_table(index="card_id", columns="position", values="done", aggfunc="max").fillna(False)
+    lines = pd.Series(0, index=grid.index)
+    for line in BINGO_LINES:
+        if set(line) <= set(grid.columns):
+            lines += grid[line].astype(bool).all(axis=1).astype(int)
+    return {"n_cards": len(grid), "n_bingo_users": int((lines > 0).sum()), "n_lines": int(lines.sum()),
+            "n_full": int((lines == len(BINGO_LINES)).sum()), "lines_per_card": lines}
+
+
+def _ref_time(ts: pd.Series, now: pd.Timestamp) -> pd.Timestamp:
+    """「いま」の基準時刻。now がデータより前（合成データ）なら最新のチェックインを基準にする。"""
+    ref = min(_to_utc(now), ts.max())
+    return ts.max() if not (ts <= ref).any() else ref
+
+
+def public_board(check_ins: pd.DataFrame, booth_ratings: pd.DataFrame, bingo_cells: pd.DataFrame,
+                 now: pd.Timestamp, booths: pd.DataFrame | None = None,
+                 categories: pd.DataFrame | None = None, award_votes: pd.DataFrame | None = None) -> dict:
+    """来場者に見せる数字。**会場全体の集計だけを返す。**
+
+    - 個人を特定できる値（user_id・個別の評価）を返さない
+    - **ブースを特定できる値（ブース名・ブース別の数）を返さない。** 出展者間の比較を来場者に見せない
+    - 評価は「件数」だけ。良し悪し（高評価率）は出さない
+    - 推薦の A/B に関わる数字は出さない（03 §5）
+    """
+    n_booths = None
+    if booths is not None and "id" in booths.columns:
+        active = booths
+        if "is_active" in booths.columns:
+            active = booths[pd.to_numeric(booths["is_active"], errors="coerce").fillna(1) == 1]
+        n_booths = int(active["id"].nunique()) or None
+    out: dict = {
+        "n_participants": int(check_ins["user_id"].nunique()) if not check_ins.empty else 0,
+        "n_checkins": len(check_ins),
+        "n_ratings": len(booth_ratings),
+        "ratings_per_user": None,
+        "n_votes": len(award_votes) if award_votes is not None else 0,
+        "n_active": 0,
+        "recent_checkins": 0,
+        "prev_checkins": 0,
+        "visits_mean": None,
+        "genres_mean": None,
+        "per_10min": pd.Series(dtype=int),
+        "cum_checkins": pd.Series(dtype=int),
+        "cum_ratings": pd.Series(dtype=int),
+        "peak": None,
+        "genre_share": pd.Series(dtype=int),
+        "visit_buckets": pd.Series(dtype=int),
+        "bingo": bingo_progress(bingo_cells, check_ins),
+        "n_booths_visited": 0,
+        "n_booths": n_booths,
+        "achievers": None,
+        "active_min": ACTIVE_MIN,
+    }
+    lines = out["bingo"]["lines_per_card"]
+    per_user_booths = check_ins.groupby("user_id")["booth_id"].nunique() if not check_ins.empty else pd.Series(dtype=int)
+    # 達成者の段階。カードは1人1枚なので、カード数をそのまま人数として扱う
+    out["achievers"] = {
+        "n_cards": out["bingo"]["n_cards"],
+        "bingo_1": int((lines >= 1).sum()),
+        "bingo_many": int((lines >= MANY_LINES).sum()),
+        "card_complete": int((lines == len(BINGO_LINES)).sum()),
+        "all_booths": int((per_user_booths >= n_booths).sum()) if n_booths else 0,
+        "many_lines": MANY_LINES,
+    }
+    if check_ins.empty:
+        return out
+    # 1人あたりの評価数（件数だけ。良し悪しは出さない）。分母は参加者（1回以上チェックインした人）
+    out["ratings_per_user"] = len(booth_ratings) / out["n_participants"]
+
+    ts = pd.to_datetime(check_ins["checked_in_at"], utc=True)
+    ref = _ref_time(ts, now)
+    win = pd.Timedelta(minutes=ACTIVE_MIN)
+    recent = (ts > ref - win) & (ts <= ref)
+    out["n_active"] = int(check_ins.loc[recent, "user_id"].nunique())
+    out["recent_checkins"] = int(recent.sum())
+    out["prev_checkins"] = int(((ts > ref - 2 * win) & (ts <= ref - win)).sum())
+
+    s = ts.dt.tz_convert("Asia/Tokyo").dt.floor("10min").value_counts().sort_index()
+    out["per_10min"] = s
+    out["peak"] = {"at": s.idxmax(), "n": int(s.max())}
+    # 累計の推移（10分刻み）。評価は JST 保存列を load_tables が UTC に直したものを使う
+    out["cum_checkins"] = s.cumsum()
+    if not booth_ratings.empty and "rated_at" in booth_ratings.columns:
+        rs = (pd.to_datetime(booth_ratings["rated_at"], utc=True).dt.tz_convert("Asia/Tokyo")
+              .dt.floor("10min").value_counts().sort_index())
+        out["cum_ratings"] = rs.cumsum()
+
+    per_user = check_ins.groupby("user_id").size()
+    out["visits_mean"] = float(per_user.mean())
+    out["visit_buckets"] = pd.cut(per_user, [0, 2, 4, 7, 10, 10_000],
+                                  labels=["1〜2", "3〜4", "5〜7", "8〜10", "11〜"]).value_counts().sort_index()
+    out["n_booths_visited"] = int(check_ins["booth_id"].nunique())
+
+    names = _booth_labels(check_ins["booth_id"], booths, categories)
+    genre_of = check_ins["booth_id"].map(names["ジャンル"])
+    if (genre_of != "—").any():
+        out["genre_share"] = genre_of[genre_of != "—"].value_counts()
+        out["genres_mean"] = float(genre_of.groupby(check_ins["user_id"]).nunique().mean())
+    return out
+
+
+# ---------------------------------------------------------------------------
+# ブース詳細（運営向け）。来場者には見せない
+# ---------------------------------------------------------------------------
+
+#: 「しばらく訪問が無い」とみなす分数（運営の声かけ候補）
+QUIET_MIN = 60
+
+#: アワード票を数える role。**推薦の集計（participants_only）とは母集団が違う。**
+#: event-support-server の AWARD_VOTER_ROLE_SQL に合わせ、出展者・閲覧者の票も数える
+#: （運営の結果画面と数字を一致させるため）。role が無い人も数える
+AWARD_VOTER_ROLES = ("participant", "exhibitor", "viewer")
+
+
+def booth_ops_table(check_ins: pd.DataFrame, booth_ratings: pd.DataFrame, now: pd.Timestamp,
+                    booths: pd.DataFrame | None = None, categories: pd.DataFrame | None = None,
+                    award_votes: pd.DataFrame | None = None, hot_min: int = ACTIVE_MIN) -> pd.DataFrame:
+    """ブース1行の運営用の表。訪問ゼロのブースも載せる（ブース一覧が引けるとき）。
+
+    列: 番号・ブース・ジャンル・訪問・直近・その前・増減・評価数・平均評価・高評価率・
+        最終訪問・経過分・アワード票
+    """
+    ids = pd.Index(check_ins["booth_id"].unique() if not check_ins.empty else [])
+    if booths is not None and "id" in booths.columns:
+        b = booths
+        if "is_active" in b.columns:
+            b = b[pd.to_numeric(b["is_active"], errors="coerce").fillna(1) == 1]
+        ids = ids.union(pd.Index(b["id"]))
+    out = _booth_labels(pd.Series(ids, dtype=object), booths, categories)
+    if booths is not None and "display_code" in booths.columns:
+        out.insert(0, "番号", out.index.map(booths.set_index("id")["display_code"]).fillna(""))
+    else:
+        out.insert(0, "番号", "")
+
+    if not check_ins.empty:
+        ts = pd.to_datetime(check_ins["checked_in_at"], utc=True)
+        ref = _ref_time(ts, now)
+        win = pd.Timedelta(minutes=hot_min)
+        g = check_ins.assign(ts=ts).groupby("booth_id")
+        out["訪問"] = g.size()
+        out["直近"] = check_ins[(ts > ref - win) & (ts <= ref)].groupby("booth_id").size()
+        out["その前"] = check_ins[(ts > ref - 2 * win) & (ts <= ref - win)].groupby("booth_id").size()
+        last = g["ts"].max()
+        out["最終訪問"] = last.dt.tz_convert("Asia/Tokyo")
+        out["経過分"] = ((ref - last).dt.total_seconds() // 60)
+    for c in ("訪問", "直近", "その前"):
+        out[c] = out.get(c, pd.Series(dtype=float)).reindex(out.index).fillna(0).astype(int)
+    out["増減"] = out["直近"] - out["その前"]
+    if "最終訪問" not in out:
+        out["最終訪問"], out["経過分"] = pd.NaT, float("nan")
+
+    if not booth_ratings.empty:
+        ratio = (pd.to_numeric(booth_ratings["rating"], errors="coerce")
+                 / pd.to_numeric(booth_ratings["scale"], errors="coerce"))
+        r = booth_ratings.assign(ratio=ratio).groupby("booth_id")["ratio"]
+        out["評価数"] = r.size()
+        out["平均評価"] = r.mean()
+        out["高評価率"] = r.apply(lambda x: (x >= HIGH_RATIO).mean())
+    out["評価数"] = out.get("評価数", pd.Series(dtype=float)).reindex(out.index).fillna(0).astype(int)
+    for c in ("平均評価", "高評価率"):
+        out[c] = out.get(c, pd.Series(dtype=float)).reindex(out.index)
+
+    votes = award_votes if award_votes is not None else pd.DataFrame(columns=["booth_id"])
+    out["アワード票"] = votes.groupby("booth_id").size().reindex(out.index).fillna(0).astype(int)
+    return out.sort_values(["訪問", "評価数"], ascending=False)
+
+
+def award_voters(award_votes: pd.DataFrame, users: pd.DataFrame | None) -> pd.DataFrame:
+    """アワード票の母集団を AWARD_VOTER_ROLES に絞る（運営・manager の試し投票を数えない）。"""
+    if award_votes.empty or users is None or not {"id", "role"} <= set(users.columns):
+        return award_votes
+    role = award_votes["user_id"].map(users.set_index("id")["role"])
+    return award_votes[role.isna() | role.isin(AWARD_VOTER_ROLES)]
+
+
+def award_ranking(award_votes: pd.DataFrame, awards: pd.DataFrame, booths: pd.DataFrame | None = None,
+                  categories: pd.DataFrame | None = None, limit: int = 5) -> list[dict]:
+    """賞ごとの上位。**同数は同順位**（23, 23, 20 → 1位, 1位, 3位）で、同率は切り捨てない。
+
+    event-support-server の rankTopBooths と同じ規則。賞は sort_order 順。
+    返り値: [{"award": 賞名, "n_votes": 総票数, "table": DataFrame(順位・ブース・ジャンル・票)}]
+    """
+    if awards is None or awards.empty:
+        return []
+    a = awards.assign(_o=pd.to_numeric(awards.get("sort_order", 0), errors="coerce").fillna(0))
+    out = []
+    for _, aw in a.sort_values(["_o", "name"]).iterrows():
+        v = award_votes[award_votes["award_id"] == aw["id"]] if not award_votes.empty else award_votes
+        cnt = v.groupby("booth_id").size().rename("票") if not v.empty else pd.Series(dtype=int, name="票")
+        lbl = _booth_labels(pd.Series(cnt.index, dtype=object), booths, categories)
+        t = lbl.join(cnt).reset_index(drop=True).sort_values(["票", "ブース"], ascending=[False, True])
+        t.insert(0, "順位", t["票"].rank(method="min", ascending=False).astype(int) if len(t) else [])
+        out.append({"award": aw["name"], "n_votes": int(cnt.sum()),
+                    "table": t[t["順位"] <= limit].reset_index(drop=True)})
+    return out
+
+
+def _booth_labels(booth_ids: pd.Series, booths: pd.DataFrame | None,
+                  categories: pd.DataFrame | None) -> pd.DataFrame:
+    """booth_id → ブース名・ジャンル名の表（index は booth_id）。引けなければ ID の先頭8文字と「—」。"""
+    ids = pd.Index(pd.Series(booth_ids, dtype=object).unique())
+    name = pd.Series(ids.astype(str).str[:8], index=ids)
+    genre = pd.Series("—", index=ids)
+    if booths is not None and not booths.empty and "id" in booths.columns:
+        b = booths.set_index("id")
+        if "name" in b.columns:
+            name = pd.Series(ids.map(b["name"]), index=ids).fillna(name)
+        if "category_id" in b.columns:
+            cat = pd.Series(ids.map(b["category_id"]), index=ids)
+            if categories is not None and not categories.empty and {"id", "name"} <= set(categories.columns):
+                cat = cat.map(categories.set_index("id")["name"]).fillna(cat)
+            genre = cat.fillna("—")
+    return pd.DataFrame({"ブース": name, "ジャンル": genre})

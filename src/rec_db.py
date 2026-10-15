@@ -73,9 +73,12 @@ CARD_KEYED_TABLES = ("card_unlock_events", "bingo_cells")
 # 事後の分析で追加で使うテーブル（02 §2）
 POST_TABLES: dict[str, tuple[str, ...]] = {
     "user_survey_answers": ("user_id", "age_range", "occupation", "industry", "custom_answers"),
-    "booths": ("id", "name", "category_id"),
+    "booths": ("id", "event_id", "name", "display_code", "category_id", "is_active"),
     "categories": ("id", "name"),
     "booth_tags": ("booth_id", "tag"),
+    # ブース詳細（運営向け）のアワード集計。**票の母集団は推薦の集計と違う**（live_metrics.award_ranking）
+    "awards": ("id", "event_id", "name", "sort_order"),
+    "award_votes": ("id", "event_id", "award_id", "user_id", "booth_id"),
 }
 
 # 取得してはならない列（02 §2「取得してはならないもの」）。防御的に明示する。

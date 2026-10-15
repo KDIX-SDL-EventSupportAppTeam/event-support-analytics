@@ -6,6 +6,8 @@
 |---|---|---|
 | 去年の行動データ | 2025年（第3回） | specs/analytics-pipeline/ |
 | 推薦の当日監視 | 2026年（第4回）当日 | specs/recommendation-evaluation/03 |
+| 来場者向けボード | 2026年（第4回）当日・会場に映す | specs/recommendation-evaluation/03 §8 |
+| ブース詳細 | 2026年（第4回）当日・運営用 | specs/recommendation-evaluation/03 §9 |
 | 推薦の事後分析 | 2026年（第4回）事後 | specs/recommendation-evaluation/04 |
 
 **合言葉はここで1回だけ確認する。** 認証を通るまで `st.navigation` を組み立てないので、
@@ -32,9 +34,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 st.set_page_config(page_title="プロトフェス 分析・監視", page_icon="📊", layout="wide")
 
 import auth  # noqa: E402
+import booth_board  # noqa: E402
 import dashboard  # noqa: E402
 import live_dashboard  # noqa: E402
 import post_analysis  # noqa: E402
+import public_board  # noqa: E402
 import page_setup  # noqa: E402
 import report  # noqa: E402
 
@@ -62,6 +66,10 @@ def main() -> None:
                 url_path="last-year", default=True),
         st.Page(_guarded(live_dashboard.main), title="推薦の当日監視", icon="🚦",
                 url_path="live"),
+        st.Page(_guarded(public_board.main), title="来場者向けボード", icon="🎉",
+                url_path="live-public"),
+        st.Page(_guarded(booth_board.main), title="ブース詳細", icon="🏷️",
+                url_path="booths"),
         st.Page(_guarded(post_analysis.main), title="推薦の事後分析", icon="📈",
                 url_path="post"),
     ]
