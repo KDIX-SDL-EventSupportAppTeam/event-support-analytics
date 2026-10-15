@@ -24,6 +24,7 @@
 
 from __future__ import annotations
 
+import html
 import sys
 from pathlib import Path
 
@@ -47,11 +48,16 @@ _STYLE = """
   padding:.8rem 1rem; margin-bottom:.8rem; background:color-mix(in srgb, var(--c) 6%, transparent); }
 .bb-award h4 { margin:0; font-size:1.1rem; }
 .bb-award small { opacity:.65; }
-.bb-row { display:flex; align-items:center; gap:.6rem; padding:.35rem 0; border-bottom:1px dashed rgba(128,128,128,.25); }
+.bb-list { margin-top:.4rem; }
+.bb-list.top { height:calc(var(--rows) * 3.2rem); }  /* 上位の枠は件数によらず高さを固定する */
+.bb-row { display:flex; align-items:center; gap:.6rem; height:3.2rem; box-sizing:border-box;
+  border-bottom:1px dashed rgba(128,128,128,.25); }
 .bb-row:last-child { border-bottom:none; }
+.bb-row.zero { opacity:.45; }
+.bb-row.empty { justify-content:center; opacity:.4; }
 .bb-rank { flex-shrink:0; width:3.6rem; white-space:nowrap; font-weight:900; font-size:1.05rem; }
-.bb-name { flex:1; font-weight:700; line-height:1.25; }
-.bb-name span { display:block; font-weight:400; font-size:.78rem; opacity:.65; }
+.bb-name { flex:1; min-width:0; font-weight:700; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.bb-name span { display:block; font-weight:400; font-size:.78rem; opacity:.65; overflow:hidden; text-overflow:ellipsis; }
 .bb-votes { font-weight:800; color:var(--c); white-space:nowrap; }
 </style>
 """
@@ -94,15 +100,35 @@ def _table(df: pd.DataFrame, cols: list[str], height: int | None = None) -> None
     )
 
 
-def _award_card(a: dict, color: str) -> str:
-    rows = "".join(
-        f'<div class="bb-row"><div class="bb-rank">{_MEDAL.get(r["順位"], "")}{r["順位"]}位</div>'
-        f'<div class="bb-name">{r["ブース"]}<span>{r["ジャンル"]}</span></div>'
+#: アワードの枠に最初から出す行数。枠の高さはこの行数ぶんで固定する
+AWARD_TOP_ROWS = 5
+
+
+def _award_rows(t: pd.DataFrame) -> str:
+    return "".join(
+        f'<div class="bb-row{" zero" if r["票"] == 0 else ""}">'
+        f'<div class="bb-rank">{_MEDAL.get(r["順位"], "") if r["票"] else ""}{r["順位"]}位</div>'
+        f'<div class="bb-name">{html.escape(_name(r))}<span>{html.escape(str(r["ジャンル"]))}</span></div>'
         f'<div class="bb-votes">{r["票"]} 票</div></div>'
-        for _, r in a["table"].iterrows()
-    ) or '<div class="bb-row">まだ投票がありません</div>'
-    return (f'<div class="bb-award" style="--c:{color}"><h4>🎖️ {a["award"]}</h4>'
-            f'<small>総投票 {a["n_votes"]} 票・同数は同順位</small>{rows}</div>')
+        for _, r in t.iterrows())
+
+
+def _name(r: pd.Series) -> str:
+    code = str(r.get("番号", "") or "").strip()
+    return f"{code} {r['ブース']}" if code else str(r["ブース"])
+
+
+def _award_card(a: dict, color: str) -> str:
+    """上位 AWARD_TOP_ROWS 行だけの枠。行が足りなくても高さは変えない（並べた枠の高さを揃える）。"""
+    t = a["table"]
+    rows = _award_rows(t.head(AWARD_TOP_ROWS)) or '<div class="bb-row empty">ブースがありません</div>'
+    return (f'<div class="bb-award" style="--c:{color}"><h4>🎖️ {html.escape(str(a["award"]))}</h4>'
+            f'<small>総投票 {a["n_votes"]} 票・同数は同順位</small>'
+            f'<div class="bb-list top" style="--rows:{AWARD_TOP_ROWS}">{rows}</div></div>')
+
+
+def _award_detail(a: dict, color: str) -> str:
+    return f'<div class="bb-list" style="--c:{color}">{_award_rows(a["table"])}</div>'
 
 
 @st.fragment(run_every=ld.REFRESH_SEC)
@@ -175,16 +201,20 @@ def render(source_kind: str, source_dir: str, event_id: str | None, top_n: int, 
 
     with tabs[3]:
         ranks = lm.award_ranking(votes if votes is not None else pd.DataFrame(columns=["award_id", "booth_id"]),
-                                 meta["awards"], meta["booths"], meta["categories"], limit=5)
+                                 meta["awards"], meta["booths"], meta["categories"])
         if not ranks:
             st.info("このイベントにはアワードがありません（または取得できませんでした）。")
         else:
-            st.caption("各賞の上位5位。**同数は同順位**で、同率は切り捨てないため5件を超えることがある"
-                       "（event-support-server の結果画面と同じ規則・同じ母集団）。")
+            st.caption(f"各賞の上位{AWARD_TOP_ROWS}ブース。「詳細」で票0のブースまで全部の順位を出す。"
+                       "**同数は同順位**（event-support-server の結果画面と同じ規則・同じ母集団）。")
             cols = st.columns(min(3, len(ranks)))
             for i, a in enumerate(ranks):
-                cols[i % len(cols)].markdown(_award_card(a, _AWARD_COLORS[i % len(_AWARD_COLORS)]),
-                                             unsafe_allow_html=True)
+                color = _AWARD_COLORS[i % len(_AWARD_COLORS)]
+                with cols[i % len(cols)]:
+                    st.markdown(_award_card(a, color), unsafe_allow_html=True)
+                    if len(a["table"]) > AWARD_TOP_ROWS:
+                        with st.expander(f"詳細（全{len(a['table'])}ブース）"):
+                            st.markdown(_award_detail(a, color), unsafe_allow_html=True)
 
     with tabs[4]:
         st.markdown(f"##### 🫥 まだ訪問ゼロ（{len(zero)}）")
