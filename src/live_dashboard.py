@@ -70,6 +70,30 @@ _SOURCE_HELP = {
 }
 
 
+@st.cache_resource
+def _shared_event() -> dict:
+    """当日監視で設定したイベント ID の置き場所。**サーバーのプロセス内で全セッションが共有する。**
+
+    会場のモニター・運営の別端末で開いた来場者向けボード／ブース詳細も、ここを見て同じイベントを表示する。
+    Cloud Run は最大3台まで増えるため、別の台に繋がった端末には届かない。そのときは
+    URL の `?event=`（当日監視のリンクに付く）か、環境変数 REC_EVENT_ID が効く。
+    """
+    return {"id": None}
+
+
+def shared_event_id() -> str | None:
+    return _shared_event()["id"]
+
+
+def set_shared_event_id(event_id: str | None) -> None:
+    _shared_event()["id"] = event_id
+
+
+def current_event_id() -> str | None:
+    """表示するイベント ID。優先順位: URL の ?event= ＞ 当日監視で共有した値 ＞ 環境変数 REC_EVENT_ID。"""
+    return (st.query_params.get("event") or shared_event_id() or EVENT_ID or "").strip() or None
+
+
 def source_label(source_kind: str, source_dir: str, event_id: str | None = None) -> str:
     """**画面に「今どちらを見ているか」を必ず出す。** 取り違えると監視が意味を失う。"""
     if source_kind == "sql":
@@ -248,7 +272,7 @@ def render(source_kind: str, source_dir: str, ops_url: str, event_id: str | None
     with tab_engine:
         engine_tab(t, ops, ops_status, now)
     with tab_people:
-        people_tab(t, booth_names(source_kind, source_dir), now)
+        people_tab(t, booth_names(source_kind, source_dir, event_id), now)
 
 
 def _signal_tab(t, ops, ops_status, now, last_good) -> None:
@@ -347,17 +371,29 @@ def _signal_tab(t, ops, ops_status, now, last_good) -> None:
         st.caption(f"分割発動: {to_jst(prog['first_split_at']):%H:%M} JST")
 
 
-@st.cache_data(ttl=600)
-def booth_names(source_kind: str, source_dir: str) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
-    """ブース名とジャンル名。**取れなくても画面は止めない**（ID の先頭8文字で代用する）。"""
+@st.cache_data(ttl=REFRESH_SEC)
+def load_booth_meta(source_kind: str, source_dir: str, event_id: str | None = None) -> dict[str, pd.DataFrame | None]:
+    """ブース・ジャンル・アワードの表。**取れない表は None にして画面は止めない。**
+
+    ブースとアワードは `event_id` を持つので scope_to_event で当日のイベントに絞る
+    （絞らないと他イベントのブースまで数える）。users はアワード票の母集団を決めるのに使う。
+    """
     src = make_source(source_kind, source_dir)
-    out = []
-    for name in ("booths", "categories"):
+    out: dict[str, pd.DataFrame | None] = {}
+    for name in ("booths", "categories", "awards", "award_votes", "users"):
         try:
-            out.append(src.table(name))
-        except Exception:  # noqa: BLE001 - 名前は飾り。取得失敗で監視を落とさない
-            out.append(None)
-    return out[0], out[1]
+            out[name] = src.table(name)
+        except Exception:  # noqa: BLE001 - 名前やアワードは飾り。取得失敗で監視を落とさない
+            out[name] = None
+    got = rec_db.scope_to_event({k: v for k, v in out.items() if v is not None}, event_id)
+    return {k: got.get(k) for k in out}
+
+
+def booth_names(source_kind: str, source_dir: str,
+                event_id: str | None = None) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    """ブース名とジャンル名。**取れなくても画面は止めない**（ID の先頭8文字で代用する）。"""
+    m = load_booth_meta(source_kind, source_dir, event_id)
+    return m["booths"], m["categories"]
 
 
 _STRATEGY_HELP = {
@@ -627,12 +663,27 @@ def main() -> None:
                                          "空なら <ディレクトリ>/ops_state.json を読む。取れなくても他は動く")
     # 当日のイベントは直前に作られるため、再デプロイせずに画面から切り替えられるようにする。
     # 空なら絞り込まない（**他のイベントと混ざる**ので本番では必ず入れる）。
-    event_id = st.sidebar.text_input("イベント ID", value=EVENT_ID or "",
-                                     help="既定は環境変数 REC_EVENT_ID。空だと全イベントが混ざる").strip() or None
+    # ここで入れた値は全画面・全端末で共有する（current_event_id）。URL にも書き、コピーで渡せるようにする
+    # key を固定し、URL を書き換えても入力欄が作り直されないようにする（既定値は初回だけ効く）
+    event_id = st.sidebar.text_input("イベント ID", value=current_event_id() or "", key="live_event_id",
+                                     help="ここで設定すると来場者向けボード・ブース詳細（他の端末を含む）にも反映される。"
+                                          "既定は環境変数 REC_EVENT_ID。空だと全イベントが混ざる").strip() or None
+    if event_id != shared_event_id():
+        set_shared_event_id(event_id)
+    if event_id:
+        st.query_params["event"] = event_id
+    elif "event" in st.query_params:
+        del st.query_params["event"]
     if SOURCE_KIND == "sql" and not event_id:
         st.sidebar.warning("イベント ID が空です。全イベントのデータが混ざって表示されます。")
     st.sidebar.caption(_SOURCE_HELP[SOURCE_KIND == "sql"])
     sidebar_demo_link(ops_url)
+    st.sidebar.divider()
+    st.sidebar.markdown("### 別ウィンドウで開く")
+    q = f"?event={event_id}" if event_id else ""
+    st.sidebar.markdown(f"- [🎉 来場者向けボード](./live-public{q})（会場に映す）\n"
+                        f"- [🏷️ ブース詳細](./booths{q})（運営用。来場者に見せない）")
+    st.sidebar.caption("統合アプリ起動時のみ。イベント ID は全画面・全端末で共有される。")
     render(SOURCE_KIND, source_dir, ops_url, event_id)
 
 
