@@ -333,8 +333,31 @@ def _render_phone(b: dict, n_people: int) -> None:
 _RENDERERS = {"landscape": _render_landscape, "portrait": _render_portrait, "phone": _render_phone}
 
 
+def _trim(b: dict, start: pd.Timestamp | None, end: pd.Timestamp | None) -> dict:
+    """時系列のグラフ（10分ごと・累計）だけを表示範囲で切る。前日のテストなど本番外の時刻を外すため。
+
+    **数字のタイルは切らない。** 累計の線は範囲より前の分を含んだ値のまま、見せる区間だけを狭める。
+    """
+    if start is None and end is None:
+        return b
+
+    def cut(s: pd.Series) -> pd.Series:
+        if s.empty:
+            return s
+        keep = [(start is None or t >= start) and (end is None or t <= end) for t in s.index]
+        return s[keep]
+
+    out = dict(b)
+    for key in ("per_10min", "cum_checkins", "cum_ratings"):
+        out[key] = cut(b[key])
+    s = out["per_10min"]
+    out["peak"] = {"at": s.idxmax(), "n": int(s.max())} if not s.empty else b["peak"]
+    return out
+
+
 @st.fragment(run_every=ld.REFRESH_SEC)
-def render(source_kind: str, source_dir: str, event_id: str | None, layout: str = "landscape") -> None:
+def render(source_kind: str, source_dir: str, event_id: str | None, layout: str = "landscape",
+           span: tuple[pd.Timestamp | None, pd.Timestamp | None] = (None, None)) -> None:
     now = pd.Timestamp.now("UTC")
     try:
         t = ld.load_tables(source_kind, source_dir, event_id)
@@ -351,7 +374,10 @@ def render(source_kind: str, source_dir: str, event_id: str | None, layout: str 
         _kpis(_venue_tiles(b, b["n_participants"], short=layout == "phone"))
         st.info("まだ訪問がありません。ブースを回ってビンゴを始めよう！")
         return
-    _RENDERERS[layout](b, b["n_participants"])
+    trimmed = _trim(b, *span)
+    if trimmed["per_10min"].empty:
+        trimmed = b  # 範囲の指定ミスでグラフが消えるよりは、全期間を出す
+    _RENDERERS[layout](trimmed, b["n_participants"])
 
 
 def _layout_switch() -> str:
@@ -366,6 +392,33 @@ def _layout_switch() -> str:
     return layout
 
 
+def _parse_jst(text: str) -> pd.Timestamp | None:
+    try:
+        return pd.Timestamp(text, tz="Asia/Tokyo")
+    except (ValueError, TypeError):
+        return None
+
+
+def _span_picker() -> tuple[pd.Timestamp | None, pd.Timestamp | None]:
+    """グラフの表示範囲（JST）。URL の ?from= / ?to= に書き、リロードや別端末でも同じ範囲で開けるようにする。"""
+    st.markdown("**グラフの表示範囲（JST）**")
+    st.caption("前日のテストなどを外したいときに。空欄なら全期間。数字のタイルは変わりません。")
+    q = st.query_params
+    span = []
+    for name, label, hint in (("from", "開始", "2026-10-16 10:00"), ("to", "終了", "空欄なら最新まで")):
+        txt = st.text_input(label, value=q.get(name, ""), key=f"pb_{name}", placeholder=hint).strip()
+        ts = _parse_jst(txt) if txt else None
+        if txt and ts is None:
+            st.warning(f"「{txt}」は日時として読めません。`YYYY-MM-DD HH:MM` で入れてください。")
+        if ts is not None:
+            if q.get(name) != txt:
+                q[name] = txt
+        elif name in q:
+            del q[name]
+        span.append(ts)
+    return span[0], span[1]
+
+
 def main() -> None:
     auth.require_password()  # 映す端末は運営が用意する。合言葉は運営が入れる
     st.markdown(_STYLE, unsafe_allow_html=True)
@@ -375,9 +428,11 @@ def main() -> None:
         st.caption("イベント ID は「推薦の当日監視」で設定した値を共有しています。")
         st.caption(f"データ源: {ld.source_label(ld.SOURCE_KIND, ld.DEFAULT_SOURCE_DIR, event_id)}")
         st.caption(f"イベント: {event_id or '（指定なし・全イベント）'}")
+        st.divider()
+        span = _span_picker()
     layout = _layout_switch()
     st.markdown(_LAYOUT_CSS[layout], unsafe_allow_html=True)
-    render(ld.SOURCE_KIND, ld.DEFAULT_SOURCE_DIR, event_id, layout)
+    render(ld.SOURCE_KIND, ld.DEFAULT_SOURCE_DIR, event_id, layout, span)
 
 
 if __name__ == "__main__":
